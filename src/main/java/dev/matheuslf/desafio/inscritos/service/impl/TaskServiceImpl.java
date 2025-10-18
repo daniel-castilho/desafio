@@ -95,6 +95,10 @@ public class TaskServiceImpl implements TaskService {
         var task = taskRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Tarefa não encontrada para o ID de atualização de status: " + id));
 
+        if (task.getStatus() == TaskStatus.DONE) {
+            throw new IllegalArgumentException("Não é possível alterar o status de uma tarefa já concluída.");
+        }
+
         task.setStatus(request.status());
         task = taskRepository.save(task);
         return taskMapper.toResponse(task);

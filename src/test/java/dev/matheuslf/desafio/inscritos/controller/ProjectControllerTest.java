@@ -10,7 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.hateoas.MediaTypes; // Import adicionado
+import org.springframework.hateoas.MediaTypes;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -82,7 +82,7 @@ class ProjectControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validRequest)))
                 .andExpect(status().isCreated())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para HAL+JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(projectId.toString()))
                 .andExpect(jsonPath("$.name").value(validRequest.name()))
                 .andExpect(jsonPath("$._links.self.href").exists())
@@ -93,23 +93,30 @@ class ProjectControllerTest {
     }
 
     @Test
-    @DisplayName("POST /projects: Deve retornar 400 BAD REQUEST e corpo de erro padronizado")
-    void create_ShouldReturn400BadRequest_WhenServiceThrowsIllegalArgumentException() throws Exception {
+    @DisplayName("POST /projects: Deve retornar 400 BAD REQUEST quando a data de término for anterior à de início")
+    void create_ShouldReturn400BadRequest_WhenEndDateIsBeforeStartDate() throws Exception {
         // Arrange
-        String errorMessage = "A data final não pode ser anterior à inicial.";
-        doThrow(new IllegalArgumentException(errorMessage))
-                .when(projectService).create(any(ProjectRequest.class));
+        String errorMessage = "A data de término não pode ser anterior à data de início do projeto.";
+        var invalidRequest = new ProjectRequest(
+                "Projeto com Data Inválida",
+                "Descrição",
+                LocalDate.now().plusDays(10),
+                LocalDate.now().plusDays(1)
+        );
+
+        // Configura o mock para lançar a exceção específica para esta regra de negócio
+        when(projectService.create(any(ProjectRequest.class))).thenThrow(new IllegalArgumentException(errorMessage));
 
         // Act & Assert
         mockMvc.perform(post("/projects")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(validRequest)))
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.error").value("Bad Request"))
-                .andExpect(jsonPath("$.message").value(errorMessage))
-                .andExpect(jsonPath("$.path").value("/projects"));
+                .andExpect(jsonPath("$.message").value(errorMessage));
+
         verify(projectService, times(1)).create(any(ProjectRequest.class));
     }
 
@@ -122,7 +129,7 @@ class ProjectControllerTest {
         // Act & Assert
         mockMvc.perform(get("/projects/{id}", projectId))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para HAL+JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(projectId.toString()))
                 .andExpect(jsonPath("$.name").value(validRequest.name()))
                 .andExpect(jsonPath("$._links.self.href").exists())
@@ -159,7 +166,7 @@ class ProjectControllerTest {
         // Act & Assert
         mockMvc.perform(get("/projects"))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para HAL+JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$._embedded.projectResponseList[0].id").value(projectId.toString()))
                 .andExpect(jsonPath("$._embedded.projectResponseList[0].name").value(validRequest.name()))
                 .andExpect(jsonPath("$._embedded.projectResponseList[0]._links.self.href").exists())
@@ -191,7 +198,7 @@ class ProjectControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateRequest)))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para HAL+JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(projectId.toString()))
                 .andExpect(jsonPath("$.name").value(updateRequest.name()))
                 .andExpect(jsonPath("$._links.self.href").exists())

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.hateoas.MediaTypes; // Import adicionado
+import org.springframework.hateoas.MediaTypes;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -92,13 +92,13 @@ class TaskControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validRequest)))
                 .andExpect(status().isCreated())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para MediaTypes.HAL_JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(taskId.toString()))
                 .andExpect(jsonPath("$.title").value(validRequest.title()))
                 .andExpect(jsonPath("$._links.self.href").exists())
                 .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks/" + taskId))
                 .andExpect(jsonPath("$._links.all-tasks.href").exists())
-                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}")) // Alterado para URL templated
+                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}"))
                 .andExpect(jsonPath("$._links.project.href").exists())
                 .andExpect(jsonPath("$._links.project.href").value("http://localhost/projects/" + projectId));
         verify(taskService, times(1)).create(any(TaskRequest.class));
@@ -134,13 +134,13 @@ class TaskControllerTest {
         // Act & Assert
         mockMvc.perform(get("/tasks/{id}", taskId))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para MediaTypes.HAL_JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(taskId.toString()))
                 .andExpect(jsonPath("$.title").value(validRequest.title()))
                 .andExpect(jsonPath("$._links.self.href").exists())
                 .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks/" + taskId))
                 .andExpect(jsonPath("$._links.all-tasks.href").exists())
-                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}")) // Alterado para URL templated
+                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}"))
                 .andExpect(jsonPath("$._links.project.href").exists())
                 .andExpect(jsonPath("$._links.project.href").value("http://localhost/projects/" + projectId));
         verify(taskService, times(1)).findById(taskId);
@@ -173,7 +173,7 @@ class TaskControllerTest {
         // Act & Assert
         mockMvc.perform(get("/tasks"))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para MediaTypes.HAL_JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$._embedded.taskResponseList[0].id").value(taskId.toString()))
                 .andExpect(jsonPath("$._embedded.taskResponseList[0].title").value(validRequest.title()))
                 .andExpect(jsonPath("$._embedded.taskResponseList[0]._links.self.href").exists())
@@ -181,7 +181,7 @@ class TaskControllerTest {
                 .andExpect(jsonPath("$._embedded.taskResponseList[0]._links.project.href").exists())
                 .andExpect(jsonPath("$._embedded.taskResponseList[0]._links.project.href").value("http://localhost/projects/" + projectId))
                 .andExpect(jsonPath("$._links.self.href").exists())
-                .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks{?status,priority,projectId}")); // Alterado para URL templated
+                .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks{?status,priority,projectId}"));
         verify(taskService, times(1)).findAllWithFilters(any(), any(), any());
     }
 
@@ -211,13 +211,13 @@ class TaskControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateRequest)))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para MediaTypes.HAL_JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(taskId.toString()))
                 .andExpect(jsonPath("$.title").value(updateRequest.title()))
                 .andExpect(jsonPath("$._links.self.href").exists())
                 .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks/" + taskId))
                 .andExpect(jsonPath("$._links.all-tasks.href").exists())
-                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}")) // Alterado para URL templated
+                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}"))
                 .andExpect(jsonPath("$._links.project.href").exists())
                 .andExpect(jsonPath("$._links.project.href").value("http://localhost/projects/" + projectId));
         verify(taskService, times(1)).update(eq(taskId), any(TaskRequest.class));
@@ -262,15 +262,39 @@ class TaskControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(statusUpdateRequest)))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaTypes.HAL_JSON)) // Alterado para MediaTypes.HAL_JSON
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
                 .andExpect(jsonPath("$.id").value(taskId.toString()))
                 .andExpect(jsonPath("$.status").value(newStatus.name()))
                 .andExpect(jsonPath("$._links.self.href").exists())
                 .andExpect(jsonPath("$._links.self.href").value("http://localhost/tasks/" + taskId))
                 .andExpect(jsonPath("$._links.all-tasks.href").exists())
-                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}")) // Alterado para URL templated
+                .andExpect(jsonPath("$._links.all-tasks.href").value("http://localhost/tasks{?status,priority,projectId}"))
                 .andExpect(jsonPath("$._links.project.href").exists())
                 .andExpect(jsonPath("$._links.project.href").value("http://localhost/projects/" + projectId));
+
+        verify(taskService, times(1)).updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class));
+    }
+
+    @Test
+    @DisplayName("PATCH /tasks/{id}/status: Deve retornar 400 BAD REQUEST ao tentar alterar status de tarefa concluída")
+    void updateStatus_ShouldReturn400BadRequest_WhenTaskIsAlreadyDone() throws Exception {
+        // Arrange
+        String errorMessage = "Não é possível alterar o status de uma tarefa já concluída.";
+        var statusUpdateRequest = new TaskStatusUpdateRequest(TaskStatus.DOING);
+
+        when(taskService.updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class)))
+                .thenThrow(new IllegalArgumentException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(patch("/tasks/{id}/status", taskId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(statusUpdateRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(errorMessage))
+                .andExpect(jsonPath("$.path").value("/tasks/" + taskId + "/status"));
 
         verify(taskService, times(1)).updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class));
     }
