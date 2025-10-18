@@ -2,6 +2,7 @@ package dev.matheuslf.desafio.inscritos.service.impl;
 
 import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
 import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
 import dev.matheuslf.desafio.inscritos.mapper.ProjectMapper;
 import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
 import dev.matheuslf.desafio.inscritos.service.ProjectService;
@@ -27,9 +28,10 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     @Transactional
     public ProjectResponse create(ProjectRequest request) {
-        var project = projectMapper.toEntity(request);
-
+        validateProjectNameUniqueness(request.name());
         validateStartDateBiggerThanEndDate(request.startDate(), request.endDate());
+
+        var project = projectMapper.toEntity(request);
         project = projectRepository.save(project);
         return projectMapper.toResponse(project);
     }
@@ -58,6 +60,11 @@ public class ProjectServiceImpl implements ProjectService {
         var project = projectRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Projeto não encontrado para o ID de atualização: " + id));
 
+        // Se o nome foi alterado, valida a unicidade do novo nome
+        if (!project.getName().equalsIgnoreCase(request.name())) {
+            validateProjectNameUniqueness(request.name());
+        }
+
         validateStartDateBiggerThanEndDate(request.startDate(), request.endDate());
 
         projectMapper.updateFromDto(request, project);
@@ -78,6 +85,12 @@ public class ProjectServiceImpl implements ProjectService {
         if (startDate != null && endDate != null &&
                 endDate.isBefore(startDate)) {
             throw new IllegalArgumentException("A data de término não pode ser anterior à data de início do projeto.");
+        }
+    }
+
+    private void validateProjectNameUniqueness(String name) {
+        if (projectRepository.existsByName(name)) {
+            throw new IllegalArgumentException("Já existe um projeto com o nome: " + name);
         }
     }
 }

@@ -104,13 +104,32 @@ class ProjectControllerTest {
                 LocalDate.now().plusDays(1)
         );
 
-        // Configura o mock para lançar a exceção específica para esta regra de negócio
         when(projectService.create(any(ProjectRequest.class))).thenThrow(new IllegalArgumentException(errorMessage));
 
         // Act & Assert
         mockMvc.perform(post("/projects")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(errorMessage));
+
+        verify(projectService, times(1)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @DisplayName("POST /projects: Deve retornar 400 BAD REQUEST quando o nome do projeto já existir")
+    void create_ShouldReturn400BadRequest_WhenNameIsDuplicate() throws Exception {
+        // Arrange
+        String errorMessage = "Já existe um projeto com o nome: " + validRequest.name();
+        when(projectService.create(any(ProjectRequest.class))).thenThrow(new IllegalArgumentException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.status").value(400))
