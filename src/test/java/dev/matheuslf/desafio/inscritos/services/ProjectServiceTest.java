@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.never;
@@ -65,8 +66,8 @@ class ProjectServiceTest {
     }
 
     @Test
-    @DisplayName("Deve criar um projeto com sucesso quando as datas são válidas")
-    void create_ShouldReturnProjectResponse_WhenDatesAreValid() {
+    @DisplayName("Deve criar um projeto com sucesso quando os dados são válidos")
+    void create_ShouldReturnProjectResponse_WhenDataIsValid() {
         // Arrange
         Project projectToSave = new Project();
         projectToSave.setName(validRequest.name());
@@ -79,6 +80,7 @@ class ProjectServiceTest {
                 savedProject.getEndDate()
         );
 
+        when(projectRepository.existsByName(validRequest.name())).thenReturn(false);
         when(projectMapper.toEntity(validRequest)).thenReturn(projectToSave);
         when(projectRepository.save(projectToSave)).thenReturn(savedProject);
         when(projectMapper.toResponse(savedProject)).thenReturn(expectedResponse);
@@ -102,16 +104,23 @@ class ProjectServiceTest {
                 LocalDate.now().plusDays(10),
                 LocalDate.now().plusDays(1)
         );
-
-        Project entityWithInvalidDates = new Project();
-        entityWithInvalidDates.setStartDate(invalidRequest.startDate());
-        entityWithInvalidDates.setEndDate(invalidRequest.endDate());
-
-        when(projectMapper.toEntity(invalidRequest)).thenReturn(entityWithInvalidDates);
+        when(projectRepository.existsByName(invalidRequest.name())).thenReturn(false);
 
         // Act & Assert
         assertThrows(IllegalArgumentException.class, () -> projectService.create(invalidRequest),
-                "A data final não pode ser anterior à data inicial.");
+                "A data de término não pode ser anterior à data de início do projeto.");
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    @DisplayName("Deve lançar IllegalArgumentException se o nome do projeto já existir")
+    void create_ShouldThrowIllegalArgumentException_WhenNameIsDuplicate() {
+        // Arrange
+        when(projectRepository.existsByName(validRequest.name())).thenReturn(true);
+
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () -> projectService.create(validRequest),
+                "Já existe um projeto com o nome: " + validRequest.name());
         verify(projectRepository, never()).save(any(Project.class));
     }
 
@@ -180,6 +189,7 @@ class ProjectServiceTest {
         );
 
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(projectEntity));
+        when(projectRepository.existsByName(updateRequest.name())).thenReturn(false);
         doNothing().when(projectMapper).updateFromDto(eq(updateRequest), eq(projectEntity));
         when(projectRepository.save(projectEntity)).thenReturn(projectEntity);
         ProjectResponse updatedResponse = new ProjectResponse(
