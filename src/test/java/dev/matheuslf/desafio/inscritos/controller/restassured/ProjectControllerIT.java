@@ -1,6 +1,7 @@
-package dev.matheuslf.desafio.inscritos.controller;
+package dev.matheuslf.desafio.inscritos.controller.restassured;
 
 import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
 import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
@@ -55,5 +56,50 @@ class ProjectControllerIT {
             .body("id", notNullValue())
             .body("name", equalTo(request.name()))
             .body("description", equalTo(request.description()));
+    }
+
+    @Test
+    @DisplayName("GET /projects/{id}: Deve retornar um projeto quando o ID existe")
+    void findById_ShouldReturnProject_WhenProjectExists() {
+        // Arrange
+        Project project = new Project();
+        project.setName("Projeto para Busca");
+        project.setStartDate(LocalDate.now());
+        projectRepository.save(project);
+
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .get("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.OK.value())
+            .body("id", equalTo(project.getId().toString()))
+            .body("name", equalTo("Projeto para Busca"));
+    }
+
+    @Test
+    @DisplayName("DELETE /projects/{id}: Deve deletar um projeto e retornar 204 NO CONTENT")
+    void delete_ShouldReturnNoContent_WhenProjectExists() {
+        // Arrange
+        Project project = new Project();
+        project.setName("Projeto para Deletar");
+        project.setStartDate(LocalDate.now());
+        projectRepository.save(project);
+
+        // Act & Assert para o DELETE
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .delete("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.NO_CONTENT.value());
+
+        // Assert para a verificação pós-deleção
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .get("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.NOT_FOUND.value());
     }
 }
