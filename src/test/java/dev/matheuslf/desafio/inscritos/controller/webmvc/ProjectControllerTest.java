@@ -1,7 +1,8 @@
-package dev.matheuslf.desafio.inscritos.controller;
+package dev.matheuslf.desafio.inscritos.controller.webmvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dev.matheuslf.desafio.inscritos.controller.ProjectController;
 import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
 import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
 import dev.matheuslf.desafio.inscritos.service.ProjectService;

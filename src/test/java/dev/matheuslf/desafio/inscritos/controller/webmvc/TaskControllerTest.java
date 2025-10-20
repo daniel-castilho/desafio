@@ -1,7 +1,8 @@
-package dev.matheuslf.desafio.inscritos.controller;
+package dev.matheuslf.desafio.inscritos.controller.webmvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dev.matheuslf.desafio.inscritos.controller.TaskController;
 import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
 import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
 import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskStatusUpdateRequest;
@@ -20,7 +21,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDate;
 import java.util.Collections;
-import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 
