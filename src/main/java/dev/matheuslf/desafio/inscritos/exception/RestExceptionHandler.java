@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.time.Instant;
 import java.util.NoSuchElementException;
@@ -67,6 +68,30 @@ public class RestExceptionHandler {
                 status.value(),
                 "Data Integrity Violation",
                 "Operation could not be completed. It may be caused by an attempt to delete a resource that is still referenced by another.",
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.FORBIDDEN;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Access Denied",
+                e.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGlobalException(Exception e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Internal Server Error",
+                e.getMessage(),
                 request.getRequestURI());
         return ResponseEntity.status(status).body(err);
     }

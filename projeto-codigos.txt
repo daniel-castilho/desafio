@@ -1,0 +1,3823 @@
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/integration/SecurityIntegrationTest.java =====
+
+package dev.matheuslf.desafio.inscritos.integration;
+
+import io.restassured.RestAssured;
+import io.restassured.response.Response;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+
+import java.time.LocalDate;
+import java.util.Map;
+
+import static io.restassured.RestAssured.given;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class SecurityIntegrationTest {
+
+    @LocalServerPort
+    int port;
+
+    @BeforeEach
+    void setUp() {
+        RestAssured.port = port;
+    }
+
+    private void registerUser(String username, String password, String role) {
+        Map<String, Object> body = Map.of(
+                "username", username,
+                "password", password,
+                "role", role
+        );
+
+        given()
+                .contentType("application/json")
+                .body(body)
+                .when()
+                .post("/auth/register")
+                .then()
+                .statusCode(200);
+    }
+
+    private String loginAndGetToken(String username, String password) {
+        Map<String, Object> body = Map.of(
+                "username", username,
+                "password", password
+        );
+
+        return given()
+                .contentType("application/json")
+                .body(body)
+                .when()
+                .post("/auth/login")
+                .then()
+                .statusCode(200)
+                .extract()
+                .path("token");
+    }
+
+    @Test
+    @DisplayName("MANAGER can create project; DEVELOPER cannot")
+    void managerCanCreateProject_developerCannot() {
+        String mgr = "mgr_integ" + System.currentTimeMillis();
+        String dev = "dev_integ" + System.currentTimeMillis();
+        String pwd = "P@ssw0rd123";
+
+        registerUser(mgr, pwd, "MANAGER");
+        registerUser(dev, pwd, "DEVELOPER");
+
+        String mgrToken = loginAndGetToken(mgr, pwd);
+        String devToken = loginAndGetToken(dev, pwd);
+
+        System.out.println("MGR_TOKEN=" + mgrToken);
+        System.out.println("DEV_TOKEN=" + devToken);
+
+        Map<String, Object> projectBody = Map.of(
+                "name", "Project Integration",
+                "description", "Created by integration test",
+                "startDate", LocalDate.now().toString(),
+                "endDate", LocalDate.now().plusDays(7).toString()
+        );
+
+        // Manager creates project -> 201
+        String projectId = given()
+                .header("Authorization", "Bearer " + mgrToken)
+                .contentType("application/json")
+                .body(projectBody)
+                .when()
+                .post("/projects")
+                .then()
+                .statusCode(201)
+                .extract()
+                .path("id");
+
+        // Developer attempts to create project -> expect 403, but currently failing with 401
+        Response devResp = given()
+                .header("Authorization", "Bearer " + devToken)
+                .contentType("application/json")
+                .body(projectBody)
+                .when()
+                .post("/projects");
+
+        System.out.println("Developer create project response code=" + devResp.getStatusCode());
+        System.out.println("Developer create project body=" + devResp.getBody().asString());
+
+        assertEquals(403, devResp.getStatusCode(), "Developer should receive 403 Forbidden when creating project but got " + devResp.getStatusCode());
+
+        // Both can list projects
+        given()
+                .header("Authorization", "Bearer " + mgrToken)
+                .when().get("/projects")
+                .then().statusCode(200);
+
+        given()
+                .header("Authorization", "Bearer " + devToken)
+                .when().get("/projects")
+                .then().statusCode(200);
+
+        // Anonymous cannot
+        given()
+                .when().get("/projects")
+                .then().statusCode(401);
+    }
+
+    @Test
+    @DisplayName("Both roles can create tasks and link to project")
+    void bothCanCreateTasks() {
+        String mgr = "mgr_task" + System.currentTimeMillis();
+        String dev = "dev_task" + System.currentTimeMillis();
+        String pwd = "P@ssw0rd123";
+
+        registerUser(mgr, pwd, "MANAGER");
+        registerUser(dev, pwd, "DEVELOPER");
+
+        String mgrToken = loginAndGetToken(mgr, pwd);
+        String devToken = loginAndGetToken(dev, pwd);
+
+        Map<String, Object> projectBody = Map.of(
+                "name", "Project For Tasks",
+                "description", "Project for task tests",
+                "startDate", LocalDate.now().toString(),
+                "endDate", LocalDate.now().plusDays(7).toString()
+        );
+
+        String projectId = given()
+                .header("Authorization", "Bearer " + mgrToken)
+                .contentType("application/json")
+                .body(projectBody)
+                .when()
+                .post("/projects")
+                .then()
+                .statusCode(201)
+                .extract()
+                .path("id");
+
+        Map<String, Object> taskBody = Map.of(
+                "title", "Integration Task",
+                "description", "Task created in integration test",
+                "status", "TODO",
+                "priority", "HIGH",
+                "dueDate", LocalDate.now().plusDays(3).toString(),
+                "projectId", projectId
+        );
+
+        // Developer creates task
+        given()
+                .header("Authorization", "Bearer " + devToken)
+                .contentType("application/json")
+                .body(taskBody)
+                .when()
+                .post("/tasks")
+                .then()
+                .statusCode(201);
+
+        // Manager creates task
+        given()
+                .header("Authorization", "Bearer " + mgrToken)
+                .contentType("application/json")
+                .body(taskBody)
+                .when()
+                .post("/tasks")
+                .then()
+                .statusCode(201);
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/serialization/ErrorResponseSerializationTest.java =====
+
+package dev.matheuslf.desafio.inscritos.serialization;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.matheuslf.desafio.inscritos.controller.exception.ErrorResponse;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.time.Instant;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@SpringBootTest
+public class ErrorResponseSerializationTest {
+
+    @Autowired
+    ObjectMapper mapper;
+
+    @Test
+    void errorResponse_instant_serializes_and_deserializes() throws Exception {
+        Instant now = Instant.parse("2025-10-20T20:21:51.871908181Z");
+        ErrorResponse err = new ErrorResponse(now, 403, "Access Denied", "msg", "/projects");
+
+        String json = mapper.writeValueAsString(err);
+        assertNotNull(json);
+
+        var node = mapper.readTree(json);
+        assertTrue(node.has("timestamp"));
+        assertTrue(node.get("timestamp").isTextual());
+
+        String ts = node.get("timestamp").asText();
+        Instant parsed = Instant.parse(ts);
+        assertEquals(now, parsed);
+
+        ErrorResponse back = mapper.readValue(json, ErrorResponse.class);
+        assertEquals(err, back);
+    }
+}
+
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/config/TestSecurityConfig.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.web.SecurityFilterChain;
+
+@TestConfiguration
+@EnableWebSecurity
+public class TestSecurityConfig {
+
+    @Bean
+    public SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())
+                .authorizeHttpRequests(authz -> authz
+                        .anyRequest().permitAll() // Permite todas as requisições para testes com @WithMockUser
+                );
+        return http.build();
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/services/ProjectServiceTest.java =====
+
+package dev.matheuslf.desafio.inscritos.services;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.mapper.ProjectMapper;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import dev.matheuslf.desafio.inscritos.service.impl.ProjectServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class ProjectServiceTest {
+
+    @InjectMocks
+    private ProjectServiceImpl projectService;
+
+    @Mock
+    private ProjectRepository projectRepository;
+
+    @Mock
+    private ProjectMapper projectMapper;
+
+    private UUID projectId;
+    private Project projectEntity;
+    private ProjectRequest validRequest;
+
+    @BeforeEach
+    void setUp() {
+        projectId = UUID.randomUUID();
+        projectEntity = new Project();
+        projectEntity.setId(projectId);
+        projectEntity.setName("Project Test");
+        projectEntity.setStartDate(LocalDate.now());
+
+        validRequest = new ProjectRequest(
+                "New Project",
+                "Description",
+                LocalDate.now().plusDays(1),
+                LocalDate.now().plusDays(10)
+        );
+    }
+
+    @Test
+    @DisplayName("Deve criar um projeto com sucesso quando os dados são válidos")
+    void create_ShouldReturnProjectResponse_WhenDataIsValid() {
+        // Arrange
+        Project projectToSave = new Project();
+        projectToSave.setName(validRequest.name());
+        Project savedProject = projectEntity;
+        ProjectResponse expectedResponse = new ProjectResponse(
+                projectId,
+                savedProject.getName(),
+                savedProject.getDescription(),
+                savedProject.getStartDate(),
+                savedProject.getEndDate()
+        );
+
+        when(projectRepository.existsByName(validRequest.name())).thenReturn(false);
+        when(projectMapper.toEntity(validRequest)).thenReturn(projectToSave);
+        when(projectRepository.save(projectToSave)).thenReturn(savedProject);
+        when(projectMapper.toResponse(savedProject)).thenReturn(expectedResponse);
+
+        // Act
+        ProjectResponse actualResponse = projectService.create(validRequest);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(projectId, actualResponse.id());
+        verify(projectRepository, times(1)).save(projectToSave);
+    }
+
+    @Test
+    @DisplayName("Deve lançar IllegalArgumentException se a data final for anterior à inicial")
+    void create_ShouldThrowIllegalArgumentException_WhenEndDateIsBeforeStartDate() {
+        // Arrange
+        ProjectRequest invalidRequest = new ProjectRequest(
+                "Invalid Project",
+                "Description",
+                LocalDate.now().plusDays(10),
+                LocalDate.now().plusDays(1)
+        );
+        when(projectRepository.existsByName(invalidRequest.name())).thenReturn(false);
+
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () -> projectService.create(invalidRequest),
+                "A data de término não pode ser anterior à data de início do projeto.");
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    @DisplayName("Deve lançar IllegalArgumentException se o nome do projeto já existir")
+    void create_ShouldThrowIllegalArgumentException_WhenNameIsDuplicate() {
+        // Arrange
+        when(projectRepository.existsByName(validRequest.name())).thenReturn(true);
+
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () -> projectService.create(validRequest),
+                "Já existe um projeto com o nome: " + validRequest.name());
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    @DisplayName("Deve retornar ProjectResponse quando o projeto é encontrado")
+    void findById_ShouldReturnProjectResponse_WhenFound() {
+        // Arrange
+        ProjectResponse expectedResponse = new ProjectResponse(
+                projectId, "Project Test", null, LocalDate.now(), null
+        );
+
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(projectEntity));
+        when(projectMapper.toResponse(projectEntity)).thenReturn(expectedResponse);
+
+        // Act
+        ProjectResponse actualResponse = projectService.findById(projectId);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(projectId, actualResponse.id());
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException quando o projeto não é encontrado")
+    void findById_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        when(projectRepository.findById(projectId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class, () -> projectService.findById(projectId),
+                "Esperava que NoSuchElementException fosse lançada para ID inexistente.");
+        verify(projectMapper, never()).toResponse(any(Project.class));
+    }
+
+    @Test
+    @DisplayName("Deve retornar uma lista de ProjectResponse em findAll")
+    void findAll_ShouldReturnListOfProjectResponse() {
+        // Arrange
+        List<Project> projectList = List.of(projectEntity);
+        ProjectResponse expectedResponseForList = new ProjectResponse(
+                projectId, "Project Test", null, LocalDate.now(), null
+        );
+        List<ProjectResponse> expectedList = List.of(expectedResponseForList);
+        when(projectRepository.findAll()).thenReturn(projectList);
+        when(projectMapper.toResponse(projectEntity)).thenReturn(expectedResponseForList);
+
+        // Act
+        List<ProjectResponse> actualList = projectService.findAll();
+
+        // Assert
+        assertNotNull(actualList);
+        assertEquals(expectedList.size(), actualList.size());
+        verify(projectRepository, times(1)).findAll();
+        verify(projectMapper, times(1)).toResponse(projectEntity);
+    }
+
+    @Test
+    @DisplayName("Deve atualizar um projeto existente e retornar ProjectResponse")
+    void update_ShouldUpdateProjectAndReturnResponse_WhenFound() {
+        // Arrange
+        ProjectRequest updateRequest = new ProjectRequest(
+                "Updated Project Name",
+                "New Description",
+                LocalDate.now().plusDays(5),
+                LocalDate.now().plusDays(15)
+        );
+
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(projectEntity));
+        when(projectRepository.existsByName(updateRequest.name())).thenReturn(false);
+        doNothing().when(projectMapper).updateFromDto(eq(updateRequest), eq(projectEntity));
+        when(projectRepository.save(projectEntity)).thenReturn(projectEntity);
+        ProjectResponse updatedResponse = new ProjectResponse(
+                projectId, updateRequest.name(), updateRequest.description(), updateRequest.startDate(), updateRequest.endDate()
+        );
+        when(projectMapper.toResponse(projectEntity)).thenReturn(updatedResponse);
+
+        // Act
+        ProjectResponse actualResponse = projectService.update(projectId, updateRequest);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(updateRequest.name(), actualResponse.name());
+        verify(projectRepository, times(1)).findById(projectId);
+        verify(projectMapper, times(1)).updateFromDto(eq(updateRequest), eq(projectEntity));
+        verify(projectRepository, times(1)).save(projectEntity);
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException ao tentar atualizar um projeto inexistente")
+    void update_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        UUID nonExistentId = UUID.randomUUID();
+        when(projectRepository.findById(nonExistentId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class,
+                () -> projectService.update(nonExistentId, validRequest),
+                "Deve lançar exceção se o projeto não for encontrado para atualização.");
+        verify(projectRepository, never()).save(any(Project.class));
+        verify(projectMapper, never()).updateFromDto(any(ProjectRequest.class), any(Project.class));
+    }
+
+    @Test
+    @DisplayName("Deve deletar um projeto existente com sucesso (usando existsById)")
+    void delete_ShouldDeleteProject_WhenFound() {
+        // Arrange
+        when(projectRepository.existsById(projectId)).thenReturn(true);
+
+        // Act
+        projectService.delete(projectId);
+
+        // Assert
+        verify(projectRepository, times(1)).existsById(projectId);
+        verify(projectRepository, times(1)).deleteById(projectId);
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException ao tentar deletar um projeto inexistente")
+    void delete_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        Mockito.lenient().when(projectRepository.existsById(projectId)).thenReturn(false);
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class, () -> projectService.delete(projectId),
+                "Deve lançar exceção se o projeto a ser deletado não existir.");
+
+        // Assert
+        verify(projectRepository, times(1)).existsById(projectId);
+        verify(projectRepository, never()).deleteById(any(UUID.class));
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/services/TaskServiceTest.java =====
+
+package dev.matheuslf.desafio.inscritos.services;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import dev.matheuslf.desafio.inscritos.mapper.TaskMapper;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import dev.matheuslf.desafio.inscritos.repository.TaskRepository;
+import dev.matheuslf.desafio.inscritos.service.impl.TaskServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class TaskServiceTest {
+
+    @InjectMocks
+    private TaskServiceImpl taskService;
+
+    @Mock
+    private TaskRepository taskRepository;
+
+    @Mock
+    private ProjectRepository projectRepository;
+
+    @Mock
+    private TaskMapper taskMapper;
+
+    private UUID taskId;
+    private UUID projectId;
+    private TaskRequest validRequest;
+    private Project mockProject;
+    private Task mockTaskEntity;
+
+    @BeforeEach
+    void setUp() {
+        taskId = UUID.randomUUID();
+        projectId = UUID.randomUUID();
+
+        // 1. Mock do Projeto Pai
+        mockProject = new Project();
+        mockProject.setId(projectId);
+        mockProject.setName("Parent Project");
+
+        // 2. Mock da Entidade Tarefa
+        mockTaskEntity = new Task();
+        mockTaskEntity.setId(taskId);
+        mockTaskEntity.setTitle("Test Task");
+        mockTaskEntity.setPriority(TaskPriority.MEDIUM);
+        mockTaskEntity.setStatus(TaskStatus.TODO);
+        mockTaskEntity.setProject(mockProject);
+
+        // 3. Mock do DTO de Requisição
+        validRequest = new TaskRequest(
+                "New Task Title",
+                "Detailed description",
+                TaskStatus.TODO,
+                TaskPriority.HIGH,
+                LocalDate.now().plusDays(5),
+                projectId
+        );
+    }
+
+    @Test
+    @DisplayName("Deve criar uma tarefa com sucesso e vincular ao projeto existente")
+    void create_ShouldSaveTaskAndReturnResponse_WhenProjectExists() {
+        // Arrange
+        Task taskToSave = new Task();
+        TaskResponse expectedResponse = new TaskResponse(
+                taskId, validRequest.title(), validRequest.description(),
+                validRequest.status().toString(), validRequest.priority().toString(),
+                validRequest.dueDate(),
+                projectId
+        );
+
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(mockProject));
+        when(taskMapper.toEntity(validRequest)).thenReturn(taskToSave);
+        when(taskRepository.save(taskToSave)).thenReturn(mockTaskEntity);
+        when(taskMapper.toResponse(mockTaskEntity)).thenReturn(expectedResponse);
+
+        // Act
+        TaskResponse actualResponse = taskService.create(validRequest);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(taskId, actualResponse.id());
+        assertEquals(mockProject, taskToSave.getProject());
+        verify(projectRepository, times(1)).findById(projectId);
+        verify(taskRepository, times(1)).save(taskToSave);
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException se o projeto pai não for encontrado")
+    void create_ShouldThrowNoSuchElementException_WhenProjectNotFound() {
+        // Arrange
+        when(projectRepository.findById(projectId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class, () -> taskService.create(validRequest),
+                "Deve lançar exceção se o projeto pai não existir.");
+        verify(taskRepository, never()).save(any(Task.class));
+        verify(taskMapper, never()).toEntity(any(TaskRequest.class));
+    }
+
+    @Test
+    @DisplayName("Deve retornar TaskResponse quando a tarefa é encontrada")
+    void findById_ShouldReturnTaskResponse_WhenFound() {
+        // Arrange
+        TaskResponse expectedResponse = new TaskResponse(
+                taskId, "Test Task", null, TaskStatus.TODO.toString(),
+                TaskPriority.MEDIUM.toString(), null, projectId
+        );
+
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(mockTaskEntity));
+        when(taskMapper.toResponse(mockTaskEntity)).thenReturn(expectedResponse);
+
+        // Act
+        TaskResponse actualResponse = taskService.findById(taskId);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(taskId, actualResponse.id());
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException quando a tarefa não é encontrada")
+    void findById_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        when(taskRepository.findById(taskId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class, () -> taskService.findById(taskId),
+                "Esperava que NoSuchElementException fosse lançada para ID inexistente.");
+        verify(taskMapper, never()).toResponse(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("Deve atualizar uma tarefa existente e retornar TaskResponse")
+    void update_ShouldUpdateTaskAndReturnResponse_WhenFound() {
+        // Arrange
+        UUID taskIdToUpdate = mockTaskEntity.getId();
+
+        TaskRequest updateRequest = new TaskRequest(
+                "Updated Title",
+                "New description",
+                TaskStatus.DOING,
+                TaskPriority.LOW,
+                LocalDate.now().plusDays(20),
+                projectId
+        );
+
+        TaskResponse expectedResponse = new TaskResponse(
+                taskIdToUpdate, updateRequest.title(), updateRequest.description(),
+                updateRequest.status().toString(), updateRequest.priority().toString(),
+                updateRequest.dueDate(),
+                projectId
+        );
+
+        when(taskRepository.findById(taskIdToUpdate)).thenReturn(Optional.of(mockTaskEntity));
+
+        doNothing().when(taskMapper).updateFromDto(eq(updateRequest), any(Task.class));
+        when(taskRepository.save(mockTaskEntity)).thenReturn(mockTaskEntity);
+        when(taskMapper.toResponse(mockTaskEntity)).thenReturn(expectedResponse);
+
+        // Act
+        TaskResponse actualResponse = taskService.update(taskIdToUpdate, updateRequest);
+
+        // Assert
+        assertNotNull(actualResponse);
+        assertEquals(updateRequest.title(), actualResponse.title());
+        assertEquals(updateRequest.status().toString(), actualResponse.status());
+        verify(taskRepository, times(1)).findById(taskIdToUpdate);
+        verify(taskMapper, times(1)).updateFromDto(eq(updateRequest), eq(mockTaskEntity)); // Verifica o mapeamento de atualização
+        verify(taskRepository, times(1)).save(mockTaskEntity);
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException ao tentar atualizar uma tarefa inexistente")
+    void update_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        UUID nonExistentId = UUID.randomUUID();
+        when(taskRepository.findById(nonExistentId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class,
+                () -> taskService.update(nonExistentId, validRequest),
+                "Deve lançar exceção se a tarefa não for encontrada.");
+        verify(taskRepository, never()).save(any(Task.class));
+        verify(taskMapper, never()).updateFromDto(any(TaskRequest.class), any(Task.class));
+    }
+
+    @Test
+    @DisplayName("Deve deletar uma tarefa existente com sucesso")
+    void delete_ShouldDeleteTask_WhenFound() {
+        // Arrange
+        when(taskRepository.existsById(taskId)).thenReturn(true);
+
+        // Act
+        taskService.delete(taskId);
+
+        // Assert
+        verify(taskRepository, times(1)).existsById(taskId);
+        verify(taskRepository, times(1)).deleteById(taskId);
+        verify(taskRepository, never()).findById(any(UUID.class));
+        verify(taskRepository, never()).delete(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("Deve lançar NoSuchElementException ao tentar deletar uma tarefa inexistente")
+    void delete_ShouldThrowNoSuchElementException_WhenNotFound() {
+        // Arrange
+        Mockito.lenient().when(taskRepository.findById(taskId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(NoSuchElementException.class, () -> taskService.delete(taskId),
+                "Esperava que NoSuchElementException fosse lançada para ID inexistente.");
+        verify(taskRepository, never()).delete(any(Task.class));
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/repository/TaskRepositoryTest.java =====
+
+package dev.matheuslf.desafio.inscritos.repository;
+
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDate;
+import java.util.List;
+
+import static dev.matheuslf.desafio.inscritos.service.impl.TaskServiceImpl.buildTaskSpecification;
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DataJpaTest
+@ActiveProfiles("test")
+class TaskRepositoryTest {
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    @Autowired
+    private ProjectRepository projectRepository;
+
+    private Project projectA;
+    private Project projectB;
+    private Task taskTodoHighA;
+    private Task taskDoneMediumA;
+    private Task taskDoingLowB;
+
+    private final LocalDate tomorrow = LocalDate.now().plusDays(1);
+
+    @BeforeEach
+    void setUp() {
+        taskRepository.deleteAll();
+        projectRepository.deleteAll();
+
+        projectA = Project.builder()
+                .name("Project Alpha")
+                .description("Project A description")
+                .startDate(LocalDate.now())
+                .build();
+        projectRepository.save(projectA);
+
+        projectB = Project.builder()
+                .name("Project Beta")
+                .description("Project B description")
+                .startDate(LocalDate.now())
+                .build();
+        projectRepository.save(projectB);
+
+        taskTodoHighA = Task.builder()
+                .title("Implementar Feature X")
+                .description("Detalhamento da Feature X")
+                .status(TaskStatus.TODO)
+                .priority(TaskPriority.HIGH)
+                .dueDate(tomorrow)
+                .project(projectA)
+                .build();
+
+        taskDoneMediumA = Task.builder()
+                .title("Testes de Integração")
+                .description("Finalizar cobertura de testes")
+                .status(TaskStatus.DONE)
+                .priority(TaskPriority.MEDIUM)
+                .dueDate(tomorrow)
+                .project(projectA)
+                .build();
+
+        taskDoingLowB = Task.builder()
+                .title("Documentação Básica")
+                .status(TaskStatus.DOING)
+                .priority(TaskPriority.LOW)
+                .dueDate(tomorrow)
+                .project(projectB)
+                .build();
+
+        taskRepository.saveAll(List.of(taskTodoHighA, taskDoneMediumA, taskDoingLowB));
+    }
+
+    @Test
+    @DisplayName("FIND: Deve salvar e recuperar uma Task com seu Project relacionado")
+    void findById_ShouldReturnTaskWithProject() {
+        // Act
+        var foundTask = taskRepository.findById(taskTodoHighA.getId()).orElse(null);
+
+        // Assert
+        assertThat(foundTask).isNotNull();
+        assertThat(foundTask.getTitle()).isEqualTo("Implementar Feature X");
+
+        // Verifica o relacionamento
+        assertThat(foundTask.getProject()).isNotNull();
+        assertThat(foundTask.getProject().getId()).isEqualTo(projectA.getId());
+        assertThat(foundTask.getProject().getName()).isEqualTo("Project Alpha");
+    }
+
+    @Test
+    @DisplayName("FILTER: Deve retornar tarefas filtradas por Status (DONE)")
+    void findAllWithFilters_ShouldFilterByStatus() {
+        // Arrange
+        var spec = buildTaskSpecification(TaskStatus.DONE, null, null);
+
+        // Act
+        var result = taskRepository.findAll(spec);
+
+        // Assert
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getTitle()).isEqualTo(taskDoneMediumA.getTitle());
+    }
+
+    @Test
+    @DisplayName("FILTER: Deve retornar tarefas filtradas por Prioridade (HIGH)")
+    void findAllWithFilters_ShouldFilterByPriority() {
+        // Arrange
+        var spec = buildTaskSpecification(null, TaskPriority.HIGH, null);
+
+        // Act
+        var result = taskRepository.findAll(spec);
+
+        // Assert
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getTitle()).isEqualTo(taskTodoHighA.getTitle());
+    }
+
+    @Test
+    @DisplayName("FILTER: Deve retornar tarefas filtradas por ID do Projeto (Project A)")
+    void findAllWithFilters_ShouldFilterByProjectId() {
+        // Arrange
+        var spec = buildTaskSpecification(null, null, projectA.getId());
+
+        // Act
+        var result = taskRepository.findAll(spec);
+
+        // Assert
+        assertThat(result).hasSize(2); // taskTodoHighA e taskDoneMediumA
+        assertThat(result).extracting(Task::getProject).extracting(Project::getName)
+                .containsOnly(projectA.getName());
+    }
+
+    @Test
+    @DisplayName("FILTER: Deve retornar tarefas filtradas com múltiplos critérios (Status DONE e Project A)")
+    void findAllWithFilters_ShouldFilterByMultipleCriteria() {
+        // Arrange
+        var spec = buildTaskSpecification(TaskStatus.DONE, null, projectA.getId());
+
+        // Act
+        var result = taskRepository.findAll(spec);
+
+        // Assert
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getTitle()).isEqualTo(taskDoneMediumA.getTitle());
+        assertThat(result.get(0).getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(result.get(0).getProject().getId()).isEqualTo(projectA.getId());
+    }
+
+    @Test
+    @DisplayName("FILTER: Deve retornar lista vazia se não houver correspondência")
+    void findAllWithFilters_ShouldReturnEmptyList_WhenNoMatch() {
+        // Arrange
+        var spec = buildTaskSpecification(TaskStatus.TODO, TaskPriority.LOW, null);
+
+        // Act
+        var result = taskRepository.findAll(spec);
+
+        // Assert
+        assertThat(result).isEmpty();
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/repository/ProjectRepositoryTest.java =====
+
+package dev.matheuslf.desafio.inscritos.repository;
+
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DataJpaTest
+@ActiveProfiles("test")
+class ProjectRepositoryTest {
+
+    @Autowired
+    private ProjectRepository projectRepository;
+
+    private Project projectAlpha;
+    private Project projectBeta;
+    private final LocalDate today = LocalDate.now();
+
+    @BeforeEach
+    void setUp() {
+        projectRepository.deleteAll();
+
+        projectAlpha = Project.builder()
+                .name("Alpha Project")
+                .description("Descrição do Projeto Alpha")
+                .startDate(today)
+                .endDate(today.plusDays(30))
+                .build();
+
+        projectBeta = Project.builder()
+                .name("Beta Project")
+                .description("Descrição do Projeto Beta")
+                .startDate(today.plusDays(10))
+                .endDate(today.plusDays(60))
+                .build();
+
+        projectRepository.saveAll(List.of(projectAlpha, projectBeta));
+    }
+
+    @Test
+    @DisplayName("CREATE: Deve salvar e retornar o Project com ID gerado")
+    void save_ShouldPersistProjectAndGenerateId() {
+        // Arrange
+        var newProject = Project.builder()
+                .name("Novo Project")
+                .startDate(today)
+                .build();
+
+        // Act
+        var savedProject = projectRepository.save(newProject);
+
+        // Assert
+        assertThat(savedProject).isNotNull();
+        assertThat(savedProject.getId()).isNotNull();
+        assertThat(savedProject.getName()).isEqualTo("Novo Project");
+        assertThat(projectRepository.count()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("READ: Deve encontrar um Project pelo ID")
+    void findById_ShouldReturnProject() {
+        // Act
+        Optional<Project> foundProject = projectRepository.findById(projectAlpha.getId());
+
+        // Assert
+        assertThat(foundProject).isPresent();
+        var project = foundProject.get();
+        assertThat(project.getName()).isEqualTo("Alpha Project");
+        assertThat(project.getStartDate()).isEqualTo(today);
+    }
+
+    @Test
+    @DisplayName("READ: Deve retornar vazio ao buscar por ID inexistente")
+    void findById_ShouldReturnEmpty_WhenNotFound() {
+        // Act
+        Optional<Project> foundProject = projectRepository.findById(java.util.UUID.randomUUID());
+
+        // Assert
+        assertThat(foundProject).isNotPresent();
+    }
+
+    @Test
+    @DisplayName("READ ALL: Deve retornar todos os Projects persistidos")
+    void findAll_ShouldReturnAllProjects() {
+        // Act
+        var projects = projectRepository.findAll();
+
+        // Assert
+        assertThat(projects).hasSize(2);
+        assertThat(projects).extracting(Project::getName)
+                .containsExactlyInAnyOrder("Alpha Project", "Beta Project");
+    }
+
+    @Test
+    @DisplayName("DELETE: Deve deletar um Project com sucesso")
+    void deleteById_ShouldRemoveProject() {
+        // Arrange
+        var initialCount = projectRepository.count();
+
+        // Act
+        projectRepository.deleteById(projectAlpha.getId());
+
+        // Assert
+        assertThat(projectRepository.count()).isEqualTo(initialCount - 1);
+        Optional<Project> deletedProject = projectRepository.findById(projectAlpha.getId());
+        assertThat(deletedProject).isNotPresent();
+    }
+
+    @Test
+    @DisplayName("EXISTS: Deve retornar true se o Project existir")
+    void existsById_ShouldReturnTrue_WhenExists() {
+        // Act & Assert
+        assertThat(projectRepository.existsById(projectAlpha.getId())).isTrue();
+    }
+
+    @Test
+    @DisplayName("EXISTS: Deve retornar false se o Project não existir")
+    void existsById_ShouldReturnFalse_WhenNotExists() {
+        // Act & Assert
+        assertThat(projectRepository.existsById(java.util.UUID.randomUUID())).isFalse();
+    }
+}
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/controller/restassured/TaskControllerIT.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.restassured;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import dev.matheuslf.desafio.inscritos.repository.TaskRepository;
+import io.restassured.RestAssured;
+import io.restassured.http.ContentType;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpStatus;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.notNullValue;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+class TaskControllerIT {
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    @Autowired
+    private ProjectRepository projectRepository;
+
+    private Project testProject;
+
+    @BeforeEach
+    void setUp() {
+        RestAssured.port = port;
+        taskRepository.deleteAll();
+        projectRepository.deleteAll();
+
+        // Arrange: Create a persistent project to be used by tasks
+        testProject = new Project();
+        testProject.setName("Projeto Pai para Testes de Tarefa");
+        testProject.setStartDate(LocalDate.now());
+        projectRepository.save(testProject);
+    }
+
+    @Test
+    @DisplayName("POST /tasks: Deve criar uma tarefa e retornar 201 CREATED")
+    void createTask_ShouldCreateAndReturnTask() {
+        var request = new TaskRequest(
+                "Tarefa de Teste End-to-End",
+                "Descrição da tarefa de teste.",
+                TaskStatus.TODO,
+                TaskPriority.MEDIUM,
+                LocalDate.now().plusDays(5),
+                testProject.getId()
+        );
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(request)
+        .when()
+            .post("/tasks")
+        .then()
+            .statusCode(HttpStatus.CREATED.value())
+            .body("id", notNullValue())
+            .body("title", equalTo(request.title()))
+            .body("projectId", equalTo(testProject.getId().toString()));
+    }
+
+    @Test
+    @DisplayName("GET /tasks/{id}: Deve retornar uma tarefa quando o ID existe")
+    void findById_ShouldReturnTask_WhenTaskExists() {
+        // Arrange
+        Task task = Task.builder()
+                .title("Tarefa para Busca")
+                .status(TaskStatus.DOING)
+                .priority(TaskPriority.HIGH)
+                .project(testProject)
+                .build();
+        taskRepository.save(task);
+
+        given()
+            .pathParam("id", task.getId())
+        .when()
+            .get("/tasks/{id}")
+        .then()
+            .statusCode(HttpStatus.OK.value())
+            .body("id", equalTo(task.getId().toString()))
+            .body("title", equalTo("Tarefa para Busca"));
+    }
+
+    @Test
+    @DisplayName("DELETE /tasks/{id}: Deve deletar uma tarefa e retornar 204 NO CONTENT")
+    void delete_ShouldReturnNoContent_WhenTaskExists() {
+        // Arrange
+        Task task = Task.builder()
+                .title("Tarefa para Deletar")
+                .status(TaskStatus.TODO)
+                .priority(TaskPriority.LOW)
+                .project(testProject)
+                .build();
+        taskRepository.save(task);
+
+        // Act & Assert para o DELETE
+        given()
+            .pathParam("id", task.getId())
+        .when()
+            .delete("/tasks/{id}")
+        .then()
+            .statusCode(HttpStatus.NO_CONTENT.value());
+
+        // Assert para a verificação pós-deleção
+        given()
+            .pathParam("id", task.getId())
+        .when()
+            .get("/tasks/{id}")
+        .then()
+            .statusCode(HttpStatus.NOT_FOUND.value());
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/controller/restassured/ProjectControllerIT.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.restassured;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import io.restassured.RestAssured;
+import io.restassured.http.ContentType;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpStatus;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDate;
+
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.notNullValue;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+class ProjectControllerIT {
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private ProjectRepository projectRepository;
+
+    @BeforeEach
+    void setUp() {
+        RestAssured.port = port;
+        projectRepository.deleteAll();
+    }
+
+    @Test
+    @DisplayName("POST /projects: Deve criar um projeto e retornar 201 CREATED")
+    void createProject_ShouldCreateAndReturnProject() {
+        var request = new ProjectRequest(
+                "Projeto de Teste End-to-End",
+                "Descrição do projeto de teste.",
+                LocalDate.now(),
+                LocalDate.now().plusWeeks(2)
+        );
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(request)
+        .when()
+            .post("/projects")
+        .then()
+            .statusCode(HttpStatus.CREATED.value())
+            .body("id", notNullValue())
+            .body("name", equalTo(request.name()))
+            .body("description", equalTo(request.description()));
+    }
+
+    @Test
+    @DisplayName("GET /projects/{id}: Deve retornar um projeto quando o ID existe")
+    void findById_ShouldReturnProject_WhenProjectExists() {
+        // Arrange
+        Project project = new Project();
+        project.setName("Projeto para Busca");
+        project.setStartDate(LocalDate.now());
+        projectRepository.save(project);
+
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .get("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.OK.value())
+            .body("id", equalTo(project.getId().toString()))
+            .body("name", equalTo("Projeto para Busca"));
+    }
+
+    @Test
+    @DisplayName("DELETE /projects/{id}: Deve deletar um projeto e retornar 204 NO CONTENT")
+    void delete_ShouldReturnNoContent_WhenProjectExists() {
+        // Arrange
+        Project project = new Project();
+        project.setName("Projeto para Deletar");
+        project.setStartDate(LocalDate.now());
+        projectRepository.save(project);
+
+        // Act & Assert para o DELETE
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .delete("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.NO_CONTENT.value());
+
+        // Assert para a verificação pós-deleção
+        given()
+            .pathParam("id", project.getId())
+        .when()
+            .get("/projects/{id}")
+        .then()
+            .statusCode(HttpStatus.NOT_FOUND.value());
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/controller/webmvc/ProjectControllerTest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.webmvc;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.service.ProjectService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.hateoas.MediaTypes;
+import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+class ProjectControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private WebApplicationContext webApplicationContext;
+
+    private ObjectMapper objectMapper;
+
+    @MockitoBean
+    private ProjectService projectService;
+
+    private final UUID projectId = UUID.randomUUID();
+    private ProjectRequest validRequest;
+    private ProjectResponse expectedResponse;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+
+        mockMvc = MockMvcBuilders
+                .webAppContextSetup(webApplicationContext)
+                .apply(springSecurity())
+                .build();
+
+        validRequest = new ProjectRequest(
+                "Novo Projeto API",
+                "Descrição do Projeto",
+                LocalDate.now().plusDays(1),
+                LocalDate.now().plusDays(10)
+        );
+
+        expectedResponse = new ProjectResponse(
+                projectId,
+                validRequest.name(),
+                validRequest.description(),
+                validRequest.startDate(),
+                validRequest.endDate()
+        );
+    }
+
+    // --- Testes para MANAGER (acesso total) ---
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("POST /projects: Deve criar um projeto e retornar status 201 CREATED com links HATEOAS")
+    void create_ShouldReturn201Created_WhenProjectIsValid_AsManager() throws Exception {
+        // Arrange
+        when(projectService.create(any(ProjectRequest.class))).thenReturn(expectedResponse);
+
+        // Act & Assert
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isCreated())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(projectId.toString()))
+                .andExpect(jsonPath("$.name").value(validRequest.name()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.self.href").value("http://localhost/projects/" + projectId))
+                .andExpect(jsonPath("$._links.all-projects.href").exists())
+                .andExpect(jsonPath("$._links.all-projects.href").value("http://localhost/projects"));
+        verify(projectService, times(1)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("POST /projects: Deve retornar 400 BAD REQUEST quando a data de término for anterior à de início")
+    void create_ShouldReturn400BadRequest_WhenEndDateIsBeforeStartDate_AsManager() throws Exception {
+        // Arrange
+        String errorMessage = "A data de término não pode ser anterior à data de início do projeto.";
+        var invalidRequest = new ProjectRequest(
+                "Projeto com Data Inválida",
+                "Descrição",
+                LocalDate.now().plusDays(10),
+                LocalDate.now().plusDays(1)
+        );
+
+        when(projectService.create(any(ProjectRequest.class))).thenThrow(new IllegalArgumentException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(errorMessage));
+
+        verify(projectService, times(1)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("POST /projects: Deve retornar 400 BAD REQUEST quando o nome do projeto já existir")
+    void create_ShouldReturn400BadRequest_WhenNameIsDuplicate_AsManager() throws Exception {
+        // Arrange
+        String errorMessage = "Já existe um projeto com o nome: " + validRequest.name();
+        when(projectService.create(any(ProjectRequest.class))).thenThrow(new IllegalArgumentException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(errorMessage));
+
+        verify(projectService, times(1)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("GET /projects/{id}: Deve retornar projeto e status 200 OK com links HATEOAS quando encontrado")
+    void findById_ShouldReturnProjectAnd200Ok_WhenFound_AsManager() throws Exception {
+        // Arrange
+        when(projectService.findById(projectId)).thenReturn(expectedResponse);
+
+        // Act & Assert
+        mockMvc.perform(get("/projects/{id}", projectId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(projectId.toString()))
+                .andExpect(jsonPath("$.name").value(validRequest.name()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.self.href").value("http://localhost/projects/" + projectId))
+                .andExpect(jsonPath("$._links.all-projects.href").exists())
+                .andExpect(jsonPath("$._links.all-projects.href").value("http://localhost/projects"));
+        verify(projectService, times(1)).findById(projectId);
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("GET /projects/{id}: Deve retornar 404 NOT FOUND e corpo de erro padronizado")
+    void findById_ShouldReturn404NotFound_WhenNotFound_AsManager() throws Exception {
+        // Arrange
+        String errorMessage = "Projeto não encontrado";
+        when(projectService.findById(projectId)).thenThrow(new NoSuchElementException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(get("/projects/{id}", projectId))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Resource Not Found"))
+                .andExpect(jsonPath("$.message").value(errorMessage))
+                .andExpect(jsonPath("$.path").value("/projects/" + projectId));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("GET /projects: Deve retornar lista de projetos e status 200 OK com links HATEOAS")
+    void findAll_ShouldReturnListOfProjectsAnd200Ok_AsManager() throws Exception {
+        // Arrange
+        var projectList = List.of(expectedResponse);
+        when(projectService.findAll()).thenReturn(projectList);
+
+        // Act & Assert
+        mockMvc.perform(get("/projects"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$._embedded.projectResponseList[0].id").value(projectId.toString()))
+                .andExpect(jsonPath("$._embedded.projectResponseList[0].name").value(validRequest.name()))
+                .andExpect(jsonPath("$._embedded.projectResponseList[0]._links.self.href").value("http://localhost/projects/" + projectId))
+                .andExpect(jsonPath("$._links.self.href").value("http://localhost/projects"))
+                .andExpect(jsonPath("$._links.all-projects.href").exists())
+                .andExpect(jsonPath("$._links.all-projects.href").value("http://localhost/projects"));
+        verify(projectService, times(1)).findAll();
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("PUT /projects/{id}: Deve atualizar e retornar status 200 OK com links HATEOAS quando o projeto é encontrado")
+    void update_ShouldReturn200Ok_WhenFound_AsManager() throws Exception {
+        // Arrange
+        var updateRequest = new ProjectRequest(
+                "Projeto Atualizado",
+                "Descrição Atualizada",
+                LocalDate.now(),
+                LocalDate.now().plusDays(5));
+        var updateResponse = new ProjectResponse(
+                projectId,
+                updateRequest.name(),
+                updateRequest.description(),
+                updateRequest.startDate(),
+                updateRequest.endDate());
+        when(projectService.update(eq(projectId), any(ProjectRequest.class))).thenReturn(updateResponse);
+
+        // Act & Assert
+        mockMvc.perform(put("/projects/{id}", projectId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(projectId.toString()))
+                .andExpect(jsonPath("$.name").value(updateRequest.name()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.self.href").value("http://localhost/projects/" + projectId))
+                .andExpect(jsonPath("$._links.all-projects.href").exists())
+                .andExpect(jsonPath("$._links.all-projects.href").value("http://localhost/projects"));
+        verify(projectService, times(1)).update(eq(projectId), any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("PUT /projects/{id}: Deve retornar 404 NOT FOUND ao tentar atualizar ID inexistente")
+    void update_ShouldReturn404NotFound_WhenNotFound_AsManager() throws Exception {
+        // Arrange
+        doThrow(new NoSuchElementException("Projeto não encontrado para o ID de atualização: " + projectId))
+                .when(projectService).update(eq(projectId), any(ProjectRequest.class));
+
+        // Act & Assert
+        mockMvc.perform(put("/projects/{id}", projectId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Resource Not Found"))
+                .andExpect(jsonPath("$.message").value("Projeto não encontrado para o ID de atualização: " + projectId))
+                .andExpect(jsonPath("$.path").value("/projects/" + projectId));
+        verify(projectService, times(1)).update(eq(projectId), any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("DELETE /projects/{id}: Deve deletar o projeto e retornar status 204 NO CONTENT")
+    void delete_ShouldReturn204NoContent_WhenFound_AsManager() throws Exception {
+        // Assert
+        doNothing().when(projectService).delete(projectId);
+
+        // Act & Assert
+        mockMvc.perform(delete("/projects/{id}", projectId))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        verify(projectService, times(1)).delete(projectId);
+    }
+
+    @Test
+    @WithMockUser(roles = "MANAGER")
+    @DisplayName("DELETE /projects/{id}: Deve retornar 404 NOT FOUND ao tentar deletar ID inexistente")
+    void delete_ShouldReturn404NotFound_WhenNotFound_AsManager() throws Exception {
+        // Arrange
+        doThrow(new NoSuchElementException("Projeto não encontrado para exclusão."))
+                .when(projectService).delete(projectId);
+
+        // Act & Assert
+        mockMvc.perform(delete("/projects/{id}", projectId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Resource Not Found"))
+                .andExpect(jsonPath("$.message").value("Projeto não encontrado para exclusão."))
+                .andExpect(jsonPath("$.path").value("/projects/" + projectId));
+        verify(projectService, times(1)).delete(projectId);
+    }
+
+    // --- Testes para DEVELOPER (apenas leitura em /projects) ---
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("GET /projects: Deve retornar lista de projetos e status 200 OK com links HATEOAS para DEVELOPER")
+    void findAll_ShouldReturnListOfProjectsAnd200Ok_AsDeveloper() throws Exception {
+        // Arrange
+        var projectList = List.of(expectedResponse);
+        when(projectService.findAll()).thenReturn(projectList);
+
+        // Act & Assert
+        mockMvc.perform(get("/projects"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$._embedded.projectResponseList[0].id").value(projectId.toString()));
+        verify(projectService, times(1)).findAll();
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("GET /projects/{id}: Deve retornar projeto e status 200 OK com links HATEOAS para DEVELOPER")
+    void findById_ShouldReturnProjectAnd200Ok_WhenFound_AsDeveloper() throws Exception {
+        // Arrange
+        when(projectService.findById(projectId)).thenReturn(expectedResponse);
+
+        // Act & Assert
+        mockMvc.perform(get("/projects/{id}", projectId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(projectId.toString()));
+        verify(projectService, times(1)).findById(projectId);
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("POST /projects: Deve retornar 403 FORBIDDEN para DEVELOPER")
+    void create_ShouldReturn403Forbidden_AsDeveloper() throws Exception {
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isForbidden());
+        verify(projectService, times(0)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("PUT /projects/{id}: Deve retornar 403 FORBIDDEN para DEVELOPER")
+    void update_ShouldReturn403Forbidden_AsDeveloper() throws Exception {
+        mockMvc.perform(put("/projects/{id}", projectId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isForbidden());
+        verify(projectService, times(0)).update(eq(projectId), any(ProjectRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("DELETE /projects/{id}: Deve retornar 403 FORBIDDEN para DEVELOPER")
+    void delete_ShouldReturn403Forbidden_AsDeveloper() throws Exception {
+        mockMvc.perform(delete("/projects/{id}", projectId))
+                .andExpect(status().isForbidden());
+        verify(projectService, times(0)).delete(projectId);
+    }
+
+    // --- Testes para usuários não autenticados ---
+
+    @Test
+    @DisplayName("GET /projects: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void findAll_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(get("/projects").with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(projectService, times(0)).findAll();
+    }
+
+    @Test
+    @DisplayName("GET /projects/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void findById_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(get("/projects/{id}", projectId).with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(projectService, times(0)).findById(projectId);
+    }
+
+    @Test
+    @DisplayName("POST /projects: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void create_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(post("/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest))
+                        .with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(projectService, times(0)).create(any(ProjectRequest.class));
+    }
+
+    @Test
+    @DisplayName("PUT /projects/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void update_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(put("/projects/{id}", projectId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest))
+                        .with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(projectService, times(0)).update(eq(projectId), any(ProjectRequest.class));
+    }
+
+    @Test
+    @DisplayName("DELETE /projects/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void delete_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(delete("/projects/{id}", projectId).with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(projectService, times(0)).delete(projectId);
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/controller/webmvc/TaskControllerTest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.webmvc;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dev.matheuslf.desafio.inscritos.controller.TaskController;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskStatusUpdateRequest;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import dev.matheuslf.desafio.inscritos.service.TaskService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.hateoas.MediaTypes;
+import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+
+import java.time.LocalDate;
+import java.util.Collections;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors; // Importação da classe
+
+@SpringBootTest
+@AutoConfigureMockMvc
+class TaskControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private WebApplicationContext webApplicationContext;
+
+    private ObjectMapper objectMapper;
+
+    @MockitoBean
+    private TaskService taskService;
+
+    private final UUID taskId = UUID.randomUUID();
+    private final UUID projectId = UUID.randomUUID();
+    private TaskRequest validRequest;
+    private TaskResponse expectedResponse;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+
+        // Configura MockMvc para aplicar os filtros de segurança
+        mockMvc = MockMvcBuilders
+                .webAppContextSetup(webApplicationContext)
+                .apply(springSecurity())
+                .build();
+
+        validRequest = new TaskRequest(
+                "Implementar Controller",
+                "Escrever testes de integração para a TaskController",
+                TaskStatus.DOING,
+                TaskPriority.HIGH,
+                LocalDate.now().plusDays(2),
+                projectId
+        );
+
+        expectedResponse = new TaskResponse(
+                taskId,
+                validRequest.title(),
+                validRequest.description(),
+                validRequest.status().name(),
+                validRequest.priority().name(),
+                validRequest.dueDate(),
+                validRequest.projectId()
+        );
+    }
+
+    // --- Testes para DEVELOPER (acesso total em /tasks) ---
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("POST /tasks: Deve criar uma tarefa e retornar status 201 CREATED com links HATEOAS para DEVELOPER")
+    void create_ShouldReturn201Created_WhenTaskIsValid_AsDeveloper() throws Exception {
+        // Arrange
+        when(taskService.create(any(TaskRequest.class))).thenReturn(expectedResponse);
+
+        // Act & Assert
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isCreated())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(taskId.toString()))
+                .andExpect(jsonPath("$.title").value(validRequest.title()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.all-tasks.href").exists());
+        verify(taskService, times(1)).create(any(TaskRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("POST /tasks: Deve retornar 400 BAD REQUEST e corpo de erro padronizado para DEVELOPER")
+    void create_ShouldReturn400BadRequest_WhenServiceThrowsException_AsDeveloper() throws Exception {
+        // Arrange
+        String errorMessage = "Dados inválidos";
+        doThrow(new IllegalArgumentException(errorMessage))
+                .when(taskService).create(any(TaskRequest.class));
+
+        // Act & Assert
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(errorMessage))
+                .andExpect(jsonPath("$.path").value("/tasks"));
+        verify(taskService, times(1)).create(any(TaskRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("GET /tasks/{id}: Deve retornar tarefa e status 200 OK com links HATEOAS quando encontrada para DEVELOPER")
+    void findById_ShouldReturnTaskAnd200Ok_WhenFound_AsDeveloper() throws Exception {
+        // Arrange
+        when(taskService.findById(taskId)).thenReturn(expectedResponse);
+
+        // Act & Assert
+        mockMvc.perform(get("/tasks/{id}", taskId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(taskId.toString()))
+                .andExpect(jsonPath("$.title").value(validRequest.title()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.all-tasks.href").exists());
+        verify(taskService, times(1)).findById(taskId);
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("GET /tasks/{id}: Deve retornar 404 NOT FOUND e corpo de erro padronizado para DEVELOPER")
+    void findById_ShouldReturn404NotFound_WhenNotFound_AsDeveloper() throws Exception {
+        // Arrange
+        String errorMessage = "Tarefa não encontrada";
+        when(taskService.findById(taskId)).thenThrow(new NoSuchElementException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(get("/tasks/{id}", taskId))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Resource Not Found"))
+                .andExpect(jsonPath("$.message").value(errorMessage))
+                .andExpect(jsonPath("$.path").value("/tasks/" + taskId));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("GET /tasks: Deve retornar lista de tarefas e status 200 OK com links HATEOAS para DEVELOPER")
+    void findAllWithoutFilters_ShouldReturnTasksAnd200Ok_AsDeveloper() throws Exception {
+        // Arrange
+        var taskList = Collections.singletonList(expectedResponse);
+        when(taskService.findAllWithFilters(any(), any(), any())).thenReturn(taskList);
+
+        // Act & Assert
+        mockMvc.perform(get("/tasks"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$._embedded.taskResponseList[0].id").value(taskId.toString()))
+                .andExpect(jsonPath("$._embedded.taskResponseList[0].title").value(validRequest.title()))
+                .andExpect(jsonPath("$._embedded.taskResponseList[0]._links.self.href").exists())
+                .andExpect(jsonPath("$._links.self.href").exists());
+        verify(taskService, times(1)).findAllWithFilters(any(), any(), any());
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("PUT /tasks/{id}: Deve atualizar a tarefa e retornar status 200 OK com links HATEOAS para DEVELOPER")
+    void update_ShouldReturn200Ok_WhenFound_AsDeveloper() throws Exception {
+        // Arrange
+        var updateRequest = new TaskRequest(
+                "Tarefa Atualizada",
+                "Descrição da Tarefa Atualizada",
+                TaskStatus.DOING,
+                TaskPriority.HIGH,
+                LocalDate.now().plusDays(2),
+                projectId);
+        var updateResponse = new TaskResponse(
+                taskId,
+                updateRequest.title(),
+                updateRequest.description(),
+                updateRequest.status().name(),
+                updateRequest.priority().name(),
+                updateRequest.dueDate(),
+                updateRequest.projectId());
+        when(taskService.update(eq(taskId), any(TaskRequest.class))).thenReturn(updateResponse);
+
+        // Act & Assert
+        mockMvc.perform(put("/tasks/{id}", taskId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(taskId.toString()))
+                .andExpect(jsonPath("$.title").value(updateRequest.title()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.all-tasks.href").exists());
+        verify(taskService, times(1)).update(eq(taskId), any(TaskRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("PATCH /tasks/{id}/status: Deve atualizar apenas o status e retornar status 200 OK com links HATEOAS para DEVELOPER")
+    void updateStatus_ShouldReturn200Ok_WhenFound_AsDeveloper() throws Exception {
+        // Arrange
+        var newStatus = TaskStatus.DONE;
+        var statusUpdateRequest = new TaskStatusUpdateRequest(newStatus);
+
+        var responseAfterUpdate = new TaskResponse(
+                taskId, validRequest.title(), validRequest.description(),
+                newStatus.name(), validRequest.priority().name(), validRequest.dueDate(), projectId);
+
+        when(taskService.updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class))).thenReturn(responseAfterUpdate);
+
+        // Act & Assert
+        mockMvc.perform(patch("/tasks/{id}/status", taskId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(statusUpdateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaTypes.HAL_JSON))
+                .andExpect(jsonPath("$.id").value(taskId.toString()))
+                .andExpect(jsonPath("$.status").value(newStatus.name()))
+                .andExpect(jsonPath("$._links.self.href").exists())
+                .andExpect(jsonPath("$._links.all-tasks.href").exists());
+
+        verify(taskService, times(1)).updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "DEVELOPER")
+    @DisplayName("DELETE /tasks/{id}: Deve deletar a tarefa e retornar status 204 NO CONTENT para DEVELOPER")
+    void delete_ShouldReturn204NoContent_WhenFound_AsDeveloper() throws Exception {
+        // Arrange
+        doNothing().when(taskService).delete(taskId);
+
+        // Act & Assert
+        mockMvc.perform(delete("/tasks/{id}", taskId))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        verify(taskService, times(1)).delete(taskId);
+    }
+
+    // --- Testes para usuários não autenticados ---
+
+    @Test
+    @DisplayName("POST /tasks: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void create_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest))
+                        .with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).create(any(TaskRequest.class));
+    }
+
+    @Test
+    @DisplayName("GET /tasks/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void findById_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(get("/tasks/{id}", taskId).with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).findById(taskId);
+    }
+
+    @Test
+    @DisplayName("GET /tasks: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void findAllWithoutFilters_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(get("/tasks").with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).findAllWithFilters(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("PUT /tasks/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void update_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(put("/tasks/{id}", taskId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest))
+                        .with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).update(eq(taskId), any(TaskRequest.class));
+    }
+
+    @Test
+    @DisplayName("PATCH /tasks/{id}/status: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void updateStatus_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(patch("/tasks/{id}/status", taskId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new TaskStatusUpdateRequest(TaskStatus.DONE)))
+                        .with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).updateStatus(eq(taskId), any(TaskStatusUpdateRequest.class));
+    }
+
+    @Test
+    @DisplayName("DELETE /tasks/{id}: Deve retornar 401 UNAUTHORIZED para usuário não autenticado")
+    void delete_ShouldReturn401Unauthorized_AsUnauthenticated() throws Exception {
+        mockMvc.perform(delete("/tasks/{id}", taskId).with(SecurityMockMvcRequestPostProcessors.anonymous())) // Alterado
+                .andExpect(status().isUnauthorized());
+        verify(taskService, times(0)).delete(taskId);
+    }
+}
+
+
+===== src/test/java/dev/matheuslf/desafio/inscritos/InscritosApplicationTests.java =====
+
+package dev.matheuslf.desafio.inscritos;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class InscritosApplicationTests {
+
+	@Test
+	void contextLoads() {
+	}
+
+}
+
+
+===== src/test/resources/application.properties =====
+
+# ================================================
+# TEST-SPECIFIC CONFIGURATIONS
+# ================================================
+
+# 1. Disable Flyway for tests.
+# We let Hibernate generate the schema from JPA entities instead.
+spring.flyway.enabled=false
+
+# 2. Let Hibernate create and drop the schema for each test run.
+spring.jpa.hibernate.ddl-auto=create-drop
+
+# 3. Point to the H2 init script to create custom domain types before Hibernate runs.
+# This makes H2 compatible with PostgreSQL-specific column types.
+spring.sql.init.mode=always
+spring.sql.init.data-locations=classpath:h2-init.sql
+
+# 4. Ensure Spring Boot uses H2 for tests.
+spring.datasource.url=jdbc:h2:mem:testdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+
+# JWT Properties for tests
+app.jwt.secret=jwtsecret25
+app.jwt.issuer=test-issuer
+app.jwt.expiration.hours=1
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/InscritosApplication.java =====
+
+package dev.matheuslf.desafio.inscritos;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class InscritosApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(InscritosApplication.class, args);
+	}
+
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/CorsConfig.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class CorsConfig {
+
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/**")
+                        .allowedOrigins("*")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowedHeaders("*");
+            }
+        };
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/SecurityConfig.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import dev.matheuslf.desafio.inscritos.config.filter.FilterToken;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final FilterToken filterToken;
+    private final CustomAccessDeniedHandler customAccessDeniedHandler;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(authz -> authz
+                        // Endpoints de autenticação
+                        .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/register").permitAll()
+
+                        // Regras para Swagger
+                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-resources/**").permitAll()
+
+                        // Permit error endpoint so AccessDenied handling doesn't forward to a secured endpoint
+                        .requestMatchers("/error", "/error/**").permitAll()
+
+                        // Regras para Tasks: Acesso total para ambas as roles
+                        .requestMatchers("/tasks/**").hasAnyRole("DEVELOPER", "MANAGER")
+
+                        // Regras para Projects: Leitura para ambas as roles
+                        .requestMatchers(HttpMethod.GET, "/projects/**").hasAnyRole("DEVELOPER", "MANAGER")
+                        // Regras para Projects: Escrita apenas para MANAGER
+                        .requestMatchers(HttpMethod.POST, "/projects/**").hasRole("MANAGER")
+                        .requestMatchers(HttpMethod.PUT, "/projects/**").hasRole("MANAGER")
+                        .requestMatchers(HttpMethod.DELETE, "/projects/**").hasRole("MANAGER")
+
+                        .anyRequest().authenticated() // Todas as outras requisições precisam de autenticação
+                )
+                .addFilterBefore(filterToken, UsernamePasswordAuthenticationFilter.class)
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                        .accessDeniedHandler(customAccessDeniedHandler)
+                );
+
+        return http.build();
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/CustomAccessDeniedHandler.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.matheuslf.desafio.inscritos.controller.exception.ErrorResponse;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.time.Instant;
+
+@Component
+public class CustomAccessDeniedHandler implements AccessDeniedHandler {
+
+    private final ObjectMapper objectMapper;
+
+    // Inject Spring's configured ObjectMapper (includes JavaTimeModule)
+    public CustomAccessDeniedHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException, ServletException {
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Access Denied",
+                accessDeniedException.getMessage(),
+                request.getRequestURI()
+        );
+
+        response.setStatus(HttpStatus.FORBIDDEN.value());
+        response.setContentType("application/json");
+        objectMapper.writeValue(response.getWriter(), err);
+        // Do NOT forward to /error to avoid additional security filter processing
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/OpenApiConfig.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Contact;
+import io.swagger.v3.oas.models.info.Info;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class OpenApiConfig {
+
+    @Bean
+    public OpenAPI customOpenAPI() {
+        return new OpenAPI()
+                .info(new Info()
+                        .title("Desafio Técnico – Sistema de Gestão de Projetos e Demandas")
+                        .description("API RESTful para CRUD de Projetos e suas respectivas Tarefas, utilizando Clean Architecture e TDD.")
+                        .version("v1.0.0")
+                        .contact(new Contact()
+                                .name("Daniel Castilho")
+                                .email("dan.castilho@gmail.com")
+                                .url("https://www.linkedin.com/in/dancastilho/")));
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/ApplicationConfig.java =====
+
+package dev.matheuslf.desafio.inscritos.config;
+
+import dev.matheuslf.desafio.inscritos.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AuthenticationProvider;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+@Configuration
+@RequiredArgsConstructor
+public class ApplicationConfig {
+
+    private final UserRepository userRepository;
+
+    @Bean
+    public UserDetailsService userDetailsService() {
+        return username -> userRepository.findByUsername(username)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+    }
+
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService());
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/filter/FilterToken.java =====
+
+package dev.matheuslf.desafio.inscritos.config.filter;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.matheuslf.desafio.inscritos.controller.exception.ErrorResponse;
+import dev.matheuslf.desafio.inscritos.repository.UserRepository;
+import dev.matheuslf.desafio.inscritos.service.token.TokenService;
+import dev.matheuslf.desafio.inscritos.service.token.exception.InvalidTokenException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.List;
+
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class FilterToken extends OncePerRequestFilter {
+
+    private final TokenService tokenService;
+    private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain)
+            throws ServletException, IOException {
+
+        String token = recoverToken(request);
+
+        if (token == null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        try {
+            String subject = tokenService.validateToken(token);
+            if (subject != null && !subject.isBlank()) {
+                var optUser = userRepository.findByUsername(subject);
+                if (optUser.isPresent()) {
+                    var user = optUser.get();
+                    var authentication = new UsernamePasswordAuthenticationToken(
+                            user, null, user.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    log.debug("Token validated and authentication set for subject={} on path={}", subject, request.getRequestURI());
+                } else {
+                    // fallback: extract role from token and build authorities
+                    String roleFromToken = tokenService.getRoleFromToken(token);
+                    if (roleFromToken != null && !roleFromToken.isBlank()) {
+                        var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + roleFromToken));
+                        var principal = subject; // keep username as principal
+                        var authentication = new UsernamePasswordAuthenticationToken(principal, null, authorities);
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                        log.debug("Token validated for subject={} but user not found in DB; using role from token={} to set authentication; requestURI={}", subject, roleFromToken, request.getRequestURI());
+                    } else {
+                        log.warn("Token valid for subject={} but no User entry found in database and no role claim available; requestURI={}", subject, request.getRequestURI());
+                    }
+                }
+            }
+        } catch (InvalidTokenException e) {
+            log.warn("Invalid token for request {}: {}", request.getRequestURI(), e.getMessage());
+            writeErrorResponse(response, HttpStatus.UNAUTHORIZED, "Invalid or expired token", request.getRequestURI());
+            return; // Interrompe o processamento da requisio
+        } catch (Exception e) {
+            log.error("Unexpected error during token processing for request {}: {}", request.getRequestURI(), e.getMessage(), e);
+            writeErrorResponse(response, HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred during token processing", request.getRequestURI());
+            return; // Interrompe o processamento da requisio
+        }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private void writeErrorResponse(HttpServletResponse response, HttpStatus status, String message, String path) throws IOException {
+        ErrorResponse err = new ErrorResponse(Instant.now(), status.value(), status.getReasonPhrase(), message, path);
+        response.setStatus(status.value());
+        response.setContentType("application/json");
+        objectMapper.writeValue(response.getWriter(), err);
+    }
+
+    private String recoverToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return null;
+        }
+        return authHeader.substring(7);
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/config/SwaggerConfig.java =====
+
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/repository/UserRepository.java =====
+
+package dev.matheuslf.desafio.inscritos.repository;
+
+import dev.matheuslf.desafio.inscritos.domain.user.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface UserRepository extends JpaRepository<User, UUID> {
+    Optional<User> findByUsername(String username);
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/repository/TaskRepository.java =====
+
+package dev.matheuslf.desafio.inscritos.repository;
+
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+import java.util.UUID;
+
+public interface TaskRepository extends JpaRepository<Task, UUID>, JpaSpecificationExecutor<Task> {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/repository/ProjectRepository.java =====
+
+package dev.matheuslf.desafio.inscritos.repository;
+
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+import java.util.UUID;
+
+public interface ProjectRepository extends JpaRepository<Project, UUID>, JpaSpecificationExecutor<Project> {
+    boolean existsByName(String name);
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/token/exception/InvalidTokenException.java =====
+
+package dev.matheuslf.desafio.inscritos.service.token.exception;
+
+public class InvalidTokenException extends RuntimeException {
+    public InvalidTokenException(String message) {
+        super(message);
+    }
+
+    public InvalidTokenException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/token/TokenService.java =====
+
+package dev.matheuslf.desafio.inscritos.service.token;
+
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.auth0.jwt.interfaces.JWTVerifier;
+import dev.matheuslf.desafio.inscritos.service.token.exception.InvalidTokenException;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
+
+@Service
+@Slf4j
+public class TokenService {
+
+    @Value("${app.jwt.secret}")
+    private String secret;
+
+    @Value("${app.jwt.issuer}")
+    private String issuer;
+
+    @Value("${app.jwt.expiration.hours}")
+    private long expirationHours;
+
+    private Algorithm algorithm;
+    private JWTVerifier verifier;
+
+    @PostConstruct
+    public void validateProperties() {
+        if (secret == null || secret.isBlank() || secret.startsWith("${")) {
+            log.error("JWT secret is not configured properly. Please set 'app.jwt.secret' (e.g. via environment variable JWT_SECRET_KEY).");
+            throw new IllegalStateException("JWT secret is not configured. Please set 'app.jwt.secret'.");
+        }
+        if (issuer == null || issuer.isBlank()) {
+            log.error("JWT issuer is not configured. Please set 'app.jwt.issuer'.");
+            throw new IllegalStateException("JWT issuer is not configured. Please set 'app.jwt.issuer'.");
+        }
+        if (expirationHours <= 0) {
+            log.error("JWT expiration.hours must be greater than 0. Current value: {}", expirationHours);
+            throw new IllegalStateException("JWT expiration.hours must be > 0.");
+        }
+        algorithm = Algorithm.HMAC256(secret);
+        verifier = JWT.require(algorithm).withIssuer(issuer).build();
+        log.info("JWT properties validated successfully. issuer={}, expirationHours={}", issuer, expirationHours);
+    }
+
+    // now include role claim
+    public String generateToken(String username, String role) {
+        Instant now = Instant.now();
+        Instant expiration = now.plus(expirationHours, ChronoUnit.HOURS);
+
+        return JWT.create()
+                .withIssuer(issuer)
+                .withSubject(username)
+                .withClaim("role", role)
+                .withIssuedAt(Date.from(now))
+                .withExpiresAt(Date.from(expiration))
+                .sign(algorithm);
+    }
+
+    public String validateToken(String token) {
+        try {
+            DecodedJWT decodedJWT = verifier.verify(token);
+            String subject = decodedJWT.getSubject();
+            log.debug("Token validated for subject={}", subject);
+            return subject;
+        } catch (JWTVerificationException exception){
+            log.warn("Token validation failed: {}", exception.getMessage());
+            throw new InvalidTokenException("Token inválido, expirado ou malformado", exception);
+        }
+    }
+
+    public String getRoleFromToken(String token) {
+        try {
+            DecodedJWT decodedJWT = verifier.verify(token);
+            return decodedJWT.getClaim("role").asString();
+        } catch (JWTVerificationException exception) {
+            log.warn("Failed to extract role from token: {}", exception.getMessage());
+            return null;
+        }
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/TaskService.java =====
+
+package dev.matheuslf.desafio.inscritos.service;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskStatusUpdateRequest;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+
+import java.util.List;
+import java.util.UUID;
+
+public interface TaskService {
+    TaskResponse create(TaskRequest request);
+    TaskResponse findById(UUID id);
+    List<TaskResponse> findAllWithFilters(TaskStatus status, TaskPriority priority, UUID projectId);
+    TaskResponse update(UUID id, TaskRequest request);
+    TaskResponse updateStatus(UUID id, TaskStatusUpdateRequest request);
+    void delete(UUID id);
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/ProjectService.java =====
+
+package dev.matheuslf.desafio.inscritos.service;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+
+import java.util.List;
+import java.util.UUID;
+
+public interface ProjectService {
+
+    ProjectResponse create(ProjectRequest request);
+    ProjectResponse findById(UUID id);
+    List<ProjectResponse> findAll();
+    ProjectResponse update(UUID id, ProjectRequest request);
+    void delete(UUID id);
+}
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/impl/ProjectServiceImpl.java =====
+
+package dev.matheuslf.desafio.inscritos.service.impl;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import dev.matheuslf.desafio.inscritos.mapper.ProjectMapper;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import dev.matheuslf.desafio.inscritos.service.ProjectService;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.UUID;
+
+@Service
+public class ProjectServiceImpl implements ProjectService {
+
+    private final ProjectRepository projectRepository;
+    private final ProjectMapper projectMapper;
+
+    public ProjectServiceImpl(ProjectRepository projectRepository, ProjectMapper projectMapper) {
+        this.projectRepository = projectRepository;
+        this.projectMapper = projectMapper;
+    }
+
+    @Override
+    @Transactional
+    public ProjectResponse create(ProjectRequest request) {
+        validateProjectNameUniqueness(request.name());
+        validateStartDateBiggerThanEndDate(request.startDate(), request.endDate());
+
+        var project = projectMapper.toEntity(request);
+        project = projectRepository.save(project);
+        return projectMapper.toResponse(project);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProjectResponse findById(UUID id) {
+        var project = projectRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Projeto não encontrado com ID: " + id));
+        return projectMapper.toResponse(project);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProjectResponse> findAll() {
+        var project = projectRepository.findAll()
+                .stream()
+                .map(projectMapper::toResponse)
+                .toList();
+        return project;
+    }
+
+    @Override
+    @Transactional
+    public ProjectResponse update(UUID id, ProjectRequest request) {
+        var project = projectRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Projeto não encontrado para o ID de atualização: " + id));
+
+        // Se o nome foi alterado, valida a unicidade do novo nome
+        if (!project.getName().equalsIgnoreCase(request.name())) {
+            validateProjectNameUniqueness(request.name());
+        }
+
+        validateStartDateBiggerThanEndDate(request.startDate(), request.endDate());
+
+        projectMapper.updateFromDto(request, project);
+        project = projectRepository.save(project);
+        return projectMapper.toResponse(project);
+    }
+
+    @Override
+    @Transactional
+    public void delete(UUID id) {
+        if (!projectRepository.existsById(id)) {
+            throw new NoSuchElementException("Não é possível deletar. Projeto não encontrado com ID: " + id);
+        }
+        projectRepository.deleteById(id);
+    }
+
+    private void validateStartDateBiggerThanEndDate(LocalDate startDate, LocalDate endDate) {
+        if (startDate != null && endDate != null &&
+                endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException("A data de término não pode ser anterior à data de início do projeto.");
+        }
+    }
+
+    private void validateProjectNameUniqueness(String name) {
+        if (projectRepository.existsByName(name)) {
+            throw new IllegalArgumentException("Já existe um projeto com o nome: " + name);
+        }
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/service/impl/TaskServiceImpl.java =====
+
+package dev.matheuslf.desafio.inscritos.service.impl;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskStatusUpdateRequest;
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import dev.matheuslf.desafio.inscritos.mapper.TaskMapper;
+import dev.matheuslf.desafio.inscritos.repository.ProjectRepository;
+import dev.matheuslf.desafio.inscritos.repository.TaskRepository;
+import dev.matheuslf.desafio.inscritos.service.TaskService;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.UUID;
+
+@Service
+public class TaskServiceImpl implements TaskService {
+
+    private final ProjectRepository projectRepository;
+    private final TaskRepository taskRepository;
+    private final TaskMapper taskMapper;
+
+    public TaskServiceImpl(TaskRepository taskRepository,
+                           ProjectRepository projectRepository,
+                           TaskMapper taskMapper) {
+        this.taskRepository = taskRepository;
+        this.projectRepository = projectRepository;
+        this.taskMapper = taskMapper;
+    }
+
+    @Override
+    @Transactional
+    public TaskResponse create(TaskRequest request) {
+        var project = projectRepository.findById(request.projectId())
+                .orElseThrow(() -> new NoSuchElementException("Projeto não encontrado com ID: " + request.projectId()));
+
+        validateDueDate(request.dueDate());
+        var task = taskMapper.toEntity(request);
+        task.setProject(project);
+
+        task = taskRepository.save(task);
+        return taskMapper.toResponse(task);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public TaskResponse findById(UUID id) {
+        var task = taskRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Task não encontrada com o ID: " + id));
+        return taskMapper.toResponse(task);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TaskResponse> findAllWithFilters(TaskStatus status, TaskPriority priority, UUID projectId) {
+        Specification<Task> spec = buildTaskSpecification(status, priority, projectId);
+
+        var tasks = taskRepository.findAll(spec);
+        return tasks.stream()
+                .map(taskMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public TaskResponse update(UUID id, TaskRequest request) {
+        var task = taskRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Task não encontrada para o o ID de atualização: " + id));
+
+        validateDueDate(request.dueDate());
+
+        if (!task.getProject().getId().equals(request.projectId())) {
+            var newProject = projectRepository.findById(request.projectId())
+                    .orElseThrow(() -> new NoSuchElementException("Novo Projeto não encontrado com ID: " + request.projectId()));
+            task.setProject(newProject);
+        }
+
+        taskMapper.updateFromDto(request, task);
+        task = taskRepository.save(task);
+        return taskMapper.toResponse(task);
+    }
+
+    @Override
+    @Transactional
+    public TaskResponse updateStatus(UUID id, TaskStatusUpdateRequest request) {
+        var task = taskRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Tarefa não encontrada para o ID de atualização de status: " + id));
+
+        if (task.getStatus() == TaskStatus.DONE) {
+            throw new IllegalArgumentException("Não é possível alterar o status de uma tarefa já concluída.");
+        }
+
+        task.setStatus(request.status());
+        task = taskRepository.save(task);
+        return taskMapper.toResponse(task);
+    }
+
+    @Override
+    @Transactional
+    public void delete(UUID id) {
+        if (!taskRepository.existsById(id)) {
+            throw new NoSuchElementException(("Não é possível deletar. Task não encontrada com o ID: " + id));
+        }
+        taskRepository.deleteById(id);
+    }
+
+    public static Specification<Task> buildTaskSpecification(
+            TaskStatus status,
+            TaskPriority priority,
+            UUID projectId
+    ) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            if (status != null) {
+                predicates.add(cb.equal(root.get("status"), status));
+            }
+
+            if (priority != null) {
+                predicates.add(cb.equal(root.get("priority"), priority));
+            }
+
+            if (projectId != null) {
+                predicates.add((Predicate) cb.equal(
+                        root.join("project", JoinType.INNER).get("id"),
+                        projectId
+                ));
+            }
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    private void validateDueDate(LocalDate dueDate) {
+        if (dueDate != null && dueDate.isBefore(LocalDate.now())) {
+            throw new IllegalArgumentException("A data limite (dueDate) não pode ser anterior à data atual.");
+        }
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/mapper/TaskMapper.java =====
+
+package dev.matheuslf.desafio.inscritos.mapper;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Task;
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
+import org.mapstruct.MappingTarget;
+
+@Mapper(componentModel = "spring")
+public interface TaskMapper {
+    @Mapping(target = "id", ignore = true)
+    @Mapping(target = "project", ignore = true)
+    Task toEntity(TaskRequest dto);
+
+    @Mapping(target = "projectId", source = "project.id")
+    @Mapping(target = "title", source = "title")
+    @Mapping(target = "description", source = "description")
+    @Mapping(target = "status", source = "status")
+    @Mapping(target = "priority", source = "priority")
+    @Mapping(target = "dueDate", source = "dueDate")
+    TaskResponse toResponse(Task entity);
+
+    @Mapping(target = "id", ignore = true)
+    @Mapping(target = "project", ignore = true)
+    void updateFromDto(TaskRequest dto, @MappingTarget Task task);
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/mapper/ProjectMapper.java =====
+
+package dev.matheuslf.desafio.inscritos.mapper;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.domain.entities.Project;
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
+import org.mapstruct.MappingTarget;
+
+@Mapper(componentModel = "spring")
+public interface ProjectMapper {
+    @Mapping(target = "id", ignore = true)
+    Project toEntity(ProjectRequest dto);
+
+    ProjectResponse toResponse(Project entity);
+
+    @Mapping(target = "id", ignore = true)
+    void updateFromDto(ProjectRequest dto, @MappingTarget Project project);
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/exception/RestExceptionHandler.java =====
+
+package dev.matheuslf.desafio.inscritos.exception;
+
+import dev.matheuslf.desafio.inscritos.controller.exception.ErrorResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.security.access.AccessDeniedException;
+
+import java.time.Instant;
+import java.util.NoSuchElementException;
+
+@RestControllerAdvice
+public class RestExceptionHandler {
+
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<ErrorResponse> handleNotFoundException(NoSuchElementException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.NOT_FOUND;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Resource Not Found",
+                e.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleBadRequestException(IllegalArgumentException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Bad Request",
+                e.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidationException(MethodArgumentNotValidException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        StringBuilder sb = new StringBuilder("Validation failed. ");
+        e.getBindingResult().getAllErrors().forEach(error -> {
+            String fieldName = ((FieldError) error).getField();
+            String errorMessage = error.getDefaultMessage();
+            sb.append(String.format("Field '%s': %s. ", fieldName, errorMessage));
+        });
+
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Validation Error",
+                sb.toString().trim(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.CONFLICT;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Data Integrity Violation",
+                "Operation could not be completed. It may be caused by an attempt to delete a resource that is still referenced by another.",
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.FORBIDDEN;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Access Denied",
+                e.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGlobalException(Exception e, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
+        ErrorResponse err = new ErrorResponse(
+                Instant.now(),
+                status.value(),
+                "Internal Server Error",
+                e.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(status).body(err);
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/entities/Project.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.entities;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.UuidGenerator;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Entity
+@Table(name = "project")
+public class Project {
+
+    @Id
+    @UuidGenerator
+    private UUID id;
+
+    @NotBlank(message = "O nome é obrigatório")
+    @Size(min = 3, max = 100, message = "O nome deve ter entre 3 e 100 caracteres")
+    @Column(nullable = false, length = 100)
+    private String name;
+
+    @Column(nullable = true)
+    private String description;
+
+    @Column(name = "start_date", nullable = true)
+    private LocalDate startDate;
+
+    @Column(name = "end_date", nullable = true)
+    private LocalDate endDate;
+
+    @Override
+    public String toString() {
+        return "Project{}" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", description='" + description + '\'' +
+                ", startDate='" + startDate +
+                ", endDate='" + endDate +
+                '}';
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/entities/Task.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.entities;
+
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.JdbcType;
+import org.hibernate.annotations.UuidGenerator;
+import org.hibernate.dialect.PostgreSQLEnumJdbcType;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Entity
+@Table(name = "task")
+public class Task {
+
+    @Id
+    @UuidGenerator
+    private UUID id;
+
+    @NotBlank(message = "O título é obrigatório")
+    @Size(min = 5, max = 150, message = "O título deve ter entre 5 e 150 caracteres")
+    @Column(nullable = false, length = 150)
+    private String title;
+
+    @Column(nullable = true)
+    private String description;
+
+    @NotNull(message = "O status da tarefa é obrigatório")
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "task_status")
+    @JdbcType(PostgreSQLEnumJdbcType.class)
+    private TaskStatus status;
+
+    @NotNull(message = "A prioridade da tarefa é obrigatória")
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "task_priority")
+    @JdbcType(PostgreSQLEnumJdbcType.class)
+    private TaskPriority priority;
+
+    @Column(name = "due_date", nullable = true)
+    private LocalDate dueDate;
+
+    @ManyToOne
+    @JoinColumn(name = "project_id", nullable = false) // Mapeia para a coluna 'project_id' no DB
+    @NotNull(message = "A tarefa deve estar vinculada a um projeto")
+    private Project project;
+
+    @Override
+    public String toString() {
+        return "Task{" +
+                "id=" + id +
+                ", title='" + title + '\'' +
+                ", description='" + description + '\'' +
+                ", status=" + status +
+                ", priority=" + priority +
+                ", dueDate=" + dueDate +
+                ", project=" + project +
+                '}';
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/user/Role.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.user;
+
+public enum Role {
+    MANAGER,
+    DEVELOPER
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/user/User.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.user;
+
+import jakarta.persistence.*;
+import lombok.*;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.UUID;
+
+@Entity
+@Table(name = "users")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class User implements UserDetails {
+
+    @Id
+    @GeneratedValue
+    private UUID id;
+
+    @Column(unique = true, nullable = false)
+    private String username; // login
+
+    @Column(nullable = false)
+    private String password;
+
+    @Enumerated(EnumType.STRING)
+    private Role role;
+
+    // Implementação do UserDetails
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
+    }
+
+    @Override
+    public String getPassword() {
+        return password;
+    }
+
+    @Override
+    public String getUsername() {
+        return username;
+    }
+
+    // Demais flags, aqui true por padrão — altere se necessário
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return true;
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return true;
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/enums/TaskStatus.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.enums;
+
+public enum TaskStatus {
+    TODO,
+    DOING,
+    DONE
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/domain/enums/TaskPriority.java =====
+
+package dev.matheuslf.desafio.inscritos.domain.enums;
+
+public enum TaskPriority {
+    LOW,
+    MEDIUM,
+    HIGH
+}
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/TokenController.java =====
+
+package dev.matheuslf.desafio.inscritos.controller;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.auth.AuthenticationRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.auth.AuthenticationResponse;
+import dev.matheuslf.desafio.inscritos.controller.dto.auth.RegisterRequest;
+import dev.matheuslf.desafio.inscritos.domain.user.User;
+import dev.matheuslf.desafio.inscritos.repository.UserRepository;
+import dev.matheuslf.desafio.inscritos.service.token.TokenService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/auth")
+@RequiredArgsConstructor
+public class TokenController {
+
+    private final AuthenticationManager authenticationManager;
+    private final UserRepository userRepository;
+    private final TokenService tokenService;
+    private final PasswordEncoder passwordEncoder;
+
+    @PostMapping("/login")
+    public ResponseEntity<AuthenticationResponse> login(@RequestBody @Valid AuthenticationRequest request) {
+        var usernamePassword = new UsernamePasswordAuthenticationToken(request.username(), request.password());
+        var auth = this.authenticationManager.authenticate(usernamePassword);
+
+        // Extrai o username do objeto UserDetails (ou User, se for sua implementação)
+        String username = ((UserDetails) auth.getPrincipal()).getUsername();
+        // Busca o usuário persistido para obter a role
+        var user = userRepository.findByUsername(username).orElse(null);
+        String role = user != null ? (user.getRole() != null ? user.getRole().name() : null) : null;
+        var token = tokenService.generateToken(username, role);
+        return ResponseEntity.ok(new AuthenticationResponse(token));
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<Void> register(@RequestBody @Valid RegisterRequest request) {
+        if (this.userRepository.findByUsername(request.username()).isPresent()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        User newUser = new User();
+        newUser.setUsername(request.username());
+        newUser.setPassword(passwordEncoder.encode(request.password()));
+        newUser.setRole(request.role());
+        this.userRepository.save(newUser);
+
+        return ResponseEntity.ok().build();
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/ProjectController.java =====
+
+package dev.matheuslf.desafio.inscritos.controller;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.project.ProjectResponse;
+import dev.matheuslf.desafio.inscritos.service.ProjectService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import org.springframework.hateoas.CollectionModel;
+import org.springframework.hateoas.EntityModel;
+import org.springframework.hateoas.server.mvc.WebMvcLinkBuilder;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.linkTo;
+import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.methodOn;
+
+@RestController
+@RequestMapping("/projects")
+@Tag(name = "Projects", description = "Endpoints para gerenciamento de projetos")
+public class ProjectController {
+
+    private final ProjectService projectService;
+
+    public ProjectController(ProjectService projectService) {
+        this.projectService = projectService;
+    }
+
+    @Operation(summary = "Cria um novo projeto", description = "Cria um novo projeto com base nos dados fornecidos.")
+    @ApiResponse(responseCode = "201", description = "Projeto criado com sucesso.")
+    @ApiResponse(responseCode = "400", description = "Dados inválidos (erros de validação).", content = @Content)
+    @PostMapping
+    public ResponseEntity<EntityModel<ProjectResponse>> createProject(@RequestBody @Valid ProjectRequest request) {
+        ProjectResponse response = projectService.create(request);
+        EntityModel<ProjectResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.id())).withSelfRel());
+        resource.add(linkTo(methodOn(ProjectController.class).getAllProjects()).withRel("all-projects"));
+        return ResponseEntity.status(HttpStatus.CREATED).body(resource);
+    }
+
+    @Operation(summary = "Busca um projeto pelo ID", description = "Retorna os detalhes de um projeto específico.")
+    @ApiResponse(responseCode = "200", description = "Projeto encontrado com sucesso.")
+    @ApiResponse(responseCode = "404", description = "Projeto não encontrado.", content = @Content)
+    @GetMapping("/{id}")
+    public ResponseEntity<EntityModel<ProjectResponse>> getProjectById(@PathVariable UUID id) {
+        ProjectResponse response = projectService.findById(id);
+        EntityModel<ProjectResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(id)).withSelfRel());
+        resource.add(linkTo(methodOn(ProjectController.class).getAllProjects()).withRel("all-projects"));
+        return ResponseEntity.ok(resource);
+    }
+
+    @Operation(summary = "Lista todos os projetos", description = "Retorna uma lista com todos os projetos cadastrados.")
+    @ApiResponse(responseCode = "200", description = "Busca concluída com sucesso.")
+    @GetMapping
+    public ResponseEntity<CollectionModel<EntityModel<ProjectResponse>>> getAllProjects() {
+        List<ProjectResponse> projects = projectService.findAll();
+        List<EntityModel<ProjectResponse>> projectResources = projects.stream()
+                .map(project -> {
+                    EntityModel<ProjectResponse> resource = EntityModel.of(project);
+                    resource.add(linkTo(methodOn(ProjectController.class).getProjectById(project.id())).withSelfRel());
+                    return resource;
+                })
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(CollectionModel.of(projectResources,
+                linkTo(methodOn(ProjectController.class).getAllProjects()).withSelfRel(),
+                linkTo(methodOn(ProjectController.class).getAllProjects()).withRel("all-projects")));
+    }
+
+    @Operation(summary = "Atualiza um projeto existente", description = "Atualiza os dados de um projeto existente pelo seu ID.")
+    @ApiResponse(responseCode = "200", description = "Projeto atualizado com sucesso.")
+    @ApiResponse(responseCode = "400", description = "Dados inválidos (erros de validação).", content = @Content)
+    @ApiResponse(responseCode = "404", description = "Projeto não encontrado.", content = @Content)
+    @PutMapping("/{id}")
+    public ResponseEntity<EntityModel<ProjectResponse>> updateProject(@PathVariable UUID id, @RequestBody @Valid ProjectRequest request) {
+        ProjectResponse response = projectService.update(id, request);
+        EntityModel<ProjectResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.id())).withSelfRel());
+        resource.add(linkTo(methodOn(ProjectController.class).getAllProjects()).withRel("all-projects"));
+        return ResponseEntity.ok(resource);
+    }
+
+    @Operation(summary = "Exclui um projeto", description = "Exclui um projeto permanentemente pelo seu ID. A exclusão pode falhar se o projeto tiver tarefas associadas.")
+    @ApiResponse(responseCode = "204", description = "Projeto excluído com sucesso.")
+    @ApiResponse(responseCode = "404", description = "Projeto não encontrado.", content = @Content)
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteProject(@PathVariable UUID id) {
+        projectService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/TaskController.java =====
+
+package dev.matheuslf.desafio.inscritos.controller;
+
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskRequest;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskResponse;
+import dev.matheuslf.desafio.inscritos.controller.dto.task.TaskStatusUpdateRequest;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import dev.matheuslf.desafio.inscritos.service.TaskService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import org.springframework.hateoas.CollectionModel;
+import org.springframework.hateoas.EntityModel;
+import org.springframework.hateoas.server.mvc.WebMvcLinkBuilder;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.linkTo;
+import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.methodOn;
+
+@RestController
+@RequestMapping("/tasks")
+@Tag(name = "Tasks", description = "Endpoints para gerenciamento de tarefas")
+public class TaskController {
+
+    private final TaskService taskService;
+
+    public TaskController(TaskService taskService) {
+        this.taskService = taskService;
+    }
+
+    @Operation(summary = "Cria uma nova tarefa", description = "Cria uma tarefa e a associa a um projeto existente.")
+    @ApiResponse(responseCode = "201", description = "Tarefa criada com sucesso.")
+    @ApiResponse(responseCode = "400", description = "Dados inválidos (erros de validação ou regra de negócio).", content = @Content)
+    @ApiResponse(responseCode = "404", description = "Projeto pai não encontrado.", content = @Content)
+    @PostMapping
+    public ResponseEntity<EntityModel<TaskResponse>> createTask(@RequestBody @Valid TaskRequest request) {
+        TaskResponse response = taskService.create(request);
+        EntityModel<TaskResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(TaskController.class).getTaskById(response.id())).withSelfRel());
+        resource.add(linkTo(methodOn(TaskController.class).getAllTaskWithFilters(null, null, null)).withRel("all-tasks"));
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.projectId())).withRel("project"));
+        return ResponseEntity.status(HttpStatus.CREATED).body(resource);
+    }
+
+    @Operation(summary = "Busca uma tarefa pelo ID", description = "Retorna os detalhes de uma tarefa específica.")
+    @ApiResponse(responseCode = "200", description = "Tarefa encontrada com sucesso.")
+    @ApiResponse(responseCode = "404", description = "Tarefa não encontrada.", content = @Content)
+    @GetMapping("/{id}")
+    public ResponseEntity<EntityModel<TaskResponse>> getTaskById(@PathVariable UUID id) {
+        TaskResponse response = taskService.findById(id);
+        EntityModel<TaskResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(TaskController.class).getTaskById(id)).withSelfRel());
+        resource.add(linkTo(methodOn(TaskController.class).getAllTaskWithFilters(null, null, null)).withRel("all-tasks"));
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.projectId())).withRel("project"));
+        return ResponseEntity.ok(resource);
+    }
+
+    @Operation(summary = "Lista todas as tarefas com filtros", description = "Retorna uma lista de tarefas, com filtros opcionais por status, prioridade ou projeto.")
+    @ApiResponse(responseCode = "200", description = "Busca concluída com sucesso.")
+    @GetMapping
+    public ResponseEntity<CollectionModel<EntityModel<TaskResponse>>> getAllTaskWithFilters(
+            @Parameter(description = "Filtrar por status da tarefa") @RequestParam(required = false) TaskStatus status,
+            @Parameter(description = "Filtrar por prioridade da tarefa") @RequestParam(required = false) TaskPriority priority,
+            @Parameter(description = "Filtrar por ID do projeto") @RequestParam(required = false) UUID projectId) {
+        List<TaskResponse> tasks = taskService.findAllWithFilters(status, priority, projectId);
+        List<EntityModel<TaskResponse>> taskResources = tasks.stream()
+                .map(task -> {
+                    EntityModel<TaskResponse> resource = EntityModel.of(task);
+                    resource.add(linkTo(methodOn(TaskController.class).getTaskById(task.id())).withSelfRel());
+                    resource.add(linkTo(methodOn(ProjectController.class).getProjectById(task.projectId())).withRel("project"));
+                    return resource;
+                })
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(CollectionModel.of(taskResources,
+                linkTo(methodOn(TaskController.class).getAllTaskWithFilters(status, priority, projectId)).withSelfRel()));
+    }
+
+    @Operation(summary = "Atualiza uma tarefa existente", description = "Atualiza todos os dados de uma tarefa existente pelo seu ID.")
+    @ApiResponse(responseCode = "200", description = "Tarefa atualizada com sucesso.")
+    @ApiResponse(responseCode = "400", description = "Dados inválidos (erros de validação).", content = @Content)
+    @ApiResponse(responseCode = "404", description = "Tarefa não encontrada.", content = @Content)
+    @PutMapping("/{id}")
+    public ResponseEntity<EntityModel<TaskResponse>> updateTask(@PathVariable UUID id, @RequestBody @Valid TaskRequest request) {
+        TaskResponse response = taskService.update(id, request);
+        EntityModel<TaskResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(TaskController.class).getTaskById(response.id())).withSelfRel());
+        resource.add(linkTo(methodOn(TaskController.class).getAllTaskWithFilters(null, null, null)).withRel("all-tasks"));
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.projectId())).withRel("project"));
+        return ResponseEntity.ok(resource);
+    }
+
+    @Operation(summary = "Atualiza o status de uma tarefa", description = "Atualiza apenas o status de uma tarefa específica.")
+    @ApiResponse(responseCode = "200", description = "Status da tarefa atualizado com sucesso.")
+    @ApiResponse(responseCode = "400", description = "Status inválido.", content = @Content)
+    @ApiResponse(responseCode = "404", description = "Tarefa não encontrada.", content = @Content)
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<EntityModel<TaskResponse>> updateTaskStatus(@PathVariable UUID id, @RequestBody @Valid TaskStatusUpdateRequest request) {
+        TaskResponse response = taskService.updateStatus(id, request);
+        EntityModel<TaskResponse> resource = EntityModel.of(response);
+        resource.add(linkTo(methodOn(TaskController.class).getTaskById(response.id())).withSelfRel());
+        resource.add(linkTo(methodOn(TaskController.class).getAllTaskWithFilters(null, null, null)).withRel("all-tasks"));
+        resource.add(linkTo(methodOn(ProjectController.class).getProjectById(response.projectId())).withRel("project"));
+        return ResponseEntity.ok(resource);
+    }
+
+    @Operation(summary = "Exclui uma tarefa", description = "Exclui uma tarefa permanentemente pelo seu ID.")
+    @ApiResponse(responseCode = "204", description = "Tarefa excluída com sucesso.")
+    @ApiResponse(responseCode = "404", description = "Tarefa não encontrada.", content = @Content)
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteTask(@PathVariable UUID id) {
+        taskService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/project/ProjectResponse.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.project;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+public record ProjectResponse(
+        UUID id,
+        String name,
+        String description,
+        LocalDate startDate,
+        LocalDate endDate
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/project/ProjectRequest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.project;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+import java.time.LocalDate;
+
+public record ProjectRequest(
+        @NotBlank(message = "O nome é obrigatório")
+        @Size(min = 3, max = 100, message = "O nome deve ter entre 3 e 100 caracteres")
+        String name,
+        String description,
+        LocalDate startDate,
+        LocalDate endDate
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/auth/RegisterRequest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.auth;
+
+import dev.matheuslf.desafio.inscritos.domain.user.Role;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
+public record RegisterRequest(
+        @NotBlank
+        String username,
+        @NotBlank
+        String password,
+        @NotNull
+        Role role
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/auth/AuthenticationRequest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.auth;
+
+import jakarta.validation.constraints.NotBlank;
+
+public record AuthenticationRequest(
+        @NotBlank
+        String username,
+        @NotBlank
+        String password
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/auth/AuthenticationResponse.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.auth;
+
+public record AuthenticationResponse(
+        String token
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/task/TaskResponse.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.task;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+public record TaskResponse(
+        UUID id,
+        String title,
+        String description,
+        String status,
+        String priority,
+        LocalDate dueDate,
+        UUID projectId
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/task/TaskStatusUpdateRequest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.task;
+
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import jakarta.validation.constraints.NotNull;
+
+public record TaskStatusUpdateRequest(
+        @NotNull(message = "O novo status é obrigatório.")
+        TaskStatus status
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/dto/task/TaskRequest.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.dto.task;
+
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskPriority;
+import dev.matheuslf.desafio.inscritos.domain.enums.TaskStatus;
+import jakarta.validation.constraints.FutureOrPresent;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+
+import java.time.LocalDate;
+import java.util.UUID;
+
+public record TaskRequest(
+        @NotBlank(message = "O título é obrigatório")
+        @Size(min = 5, max = 150, message = "O título deve ter entre 5 e 150 caracteres")
+        String title,
+
+        @Size(max = 500, message = "A descrição não pode exceder 500 caracteres")
+        String description,
+
+        @NotNull(message = "O status da tarefa é obrigatório")
+        TaskStatus status,
+
+        @NotNull(message = "A prioridade da tarefa é obrigatória")
+        TaskPriority priority,
+
+        @NotNull(message = "A data de vencimento é obrigatória") // Se a data for opcional, remova este @NotNull
+        @FutureOrPresent(message = "A data de vencimento deve ser hoje ou no futuro")
+        LocalDate dueDate,
+
+        @NotNull(message = "A tarefa deve estar vinculada a um projeto")
+        UUID projectId
+) {
+}
+
+
+===== src/main/java/dev/matheuslf/desafio/inscritos/controller/exception/ErrorResponse.java =====
+
+package dev.matheuslf.desafio.inscritos.controller.exception;
+
+import java.time.Instant;
+
+public record ErrorResponse(
+        Instant timestamp,
+        Integer status,
+        String error,
+        String message,
+        String path
+) {
+}
+
+
+===== src/main/resources/application.properties =====
+
+# Spring Boot properties
+
+# JPA / Hibernate
+spring.jpa.hibernate.ddl-auto=update
+
+# Datasource (credentials are provided by environment variables loaded from .env)
+spring.datasource.driverClassName=org.postgresql.Driver
+spring.datasource.url=jdbc:postgresql://localhost:5432/desafio
+spring.datasource.username=desafio
+spring.datasource.password=desafio
+
+spring.flyway.enabled=true
+# O Flyway vai procurar por scripts SQL nesta pasta
+spring.flyway.locations=classpath:db/migration
+
+# H2 Console (disabled for main profile)
+spring.h2.console.enabled=false
+
+# JWT Configuration
+app.jwt.secret=jwtsecret25
+app.jwt.issuer=desafio-api
+app.jwt.expiration.hours=2
+
+# Docker Compose Integration
+# Disable lifecycle management to prevent Spring from trying to start/stop containers.
+# This allows us to run the app from the IDE and connect to a manually started DB.
+spring.docker.compose.lifecycle-management=none

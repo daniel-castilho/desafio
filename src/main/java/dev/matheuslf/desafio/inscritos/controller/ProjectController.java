@@ -78,7 +78,8 @@ public class ProjectController {
                 .collect(Collectors.toList());
 
         return ResponseEntity.ok(CollectionModel.of(projectResources,
-                linkTo(methodOn(ProjectController.class).getAllProjects()).withSelfRel()));
+                linkTo(methodOn(ProjectController.class).getAllProjects()).withSelfRel(),
+                linkTo(methodOn(ProjectController.class).getAllProjects()).withRel("all-projects")));
     }
 
     @Operation(summary = "Atualiza um projeto existente", description = "Atualiza os dados de um projeto existente pelo seu ID.")
